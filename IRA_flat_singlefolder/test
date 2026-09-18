@@ -1,0 +1,64 @@
+For Secured -
+
+=
+Theme[1a] * 0.1667
++ MAX(Theme[1bi], Theme[1bii], Theme[1c], Theme[1d])×0.1667
++ MAX(Theme[1e], Theme[1f]) * 0.1667
++ Theme[1g] * 0.1667
++ Theme[1h] * 0.1667
++ MAX(Theme[2a], Theme[2b], Theme[2c], Theme[2d]) * 0.1667
+
+For Unsecured -
+
+Score =
+Theme[1a]×0.1667
++ MAX(Theme[1bi], Theme[1bii], Theme[1c], Theme[1d])×0.1667
++ MAX(Theme[1e], Theme[1f])×0.1667
++ Theme[1g]×0.1667
++ Theme[1h]×0.1667
++ MAX(Theme[2a], Theme[2b])×0.1667
+
+For SME Banking -
+
+=
+Theme[1a] × 0.2
++ MAX(
+    Theme[1bi],
+    Theme[1bii],
+    Theme[1c],
+    Theme[1d],
+    Theme[1e],
+    Theme[1f]
+  ) × 0.2
++ MAX(
+    Theme[1g],
+    Theme[1h]
+  ) × 0.1667
++ Theme[1i] × 0.2
++ MAX(
+    Theme[2a],
+    Theme[2b]
+  ) × 0.2
+
+For Wealth Lending, Retail Banking and PvB -
+
+=
+Theme[1a] * 0.2
++ MAX(
+    Theme[1bi],
+    Theme[1bii],
+    Theme[1c],
+    Theme[1d],
+    Theme[1e],
+    Theme[1f]
+  ) * 0.2
++ MAX(
+    Theme[1g],
+    Theme[1h]
+  ) * 0.2
++ Theme[1i] * 0.2
++ MAX(
+    Theme[2a],
+    Theme[2b]
+  ) * 0.2
+
