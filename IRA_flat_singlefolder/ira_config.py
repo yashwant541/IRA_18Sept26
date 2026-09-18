@@ -456,7 +456,9 @@ def _wealth_pair(ctx):
 # to instead divide by the actual group count per category (so every category
 # sums to 100%).
 W6 = 1.0 / 6.0
-NORMALISE_WEIGHTS = False
+NORMALISE_WEIGHTS = True   # inherent weight = 1/#themes per product:
+#   Secured & Unsecured have 6 themes -> 1/6 = 16.7%; the other four products
+#   have 5 themes -> 1/5 = 20%.
 
 AGG_GROUPS: Dict[str, List[List[int]]] = {
     # Secured (13 labels)
