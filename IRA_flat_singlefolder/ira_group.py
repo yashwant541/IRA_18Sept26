@@ -31,7 +31,7 @@ Each product's labels are split into two calculation kinds (per the GROUP spec):
 Categories: Secured, Unsecured, SME Banking, Wealth Lending.  The two extra Wealth
 products (Retail, PvB) share the Wealth Lending ENR (Wealth Banking + PvB).
 
-GROUP inherent reuses the theme groups (AGG_GROUPS): the worst GROUP risk number
+GROUP inherent reuses the theme groups (AGG_GROUPS): the max GROUP risk number
 per theme x the theme weight, summed; 1bii is excluded (1bi drives the pair).
 """
 from __future__ import annotations
@@ -465,12 +465,12 @@ def append_group_rows(frame, product_out, tables):
         if "What to do in Value Column" in row: row["What to do in Value Column"] = note
         group_rows.append(row)
 
-    # GROUP inherent: worst risk number per theme x weight, 1bii excluded
+    # GROUP inherent: max risk number per theme x per-theme weight, 1bii excluded
     groups = C.AGG_GROUPS.get(product_out, [])
-    weight = (1.0 / len(groups)) if (C.NORMALISE_WEIGHTS and groups) else C.W6
+    weights = C.theme_weights(product_out)
     ordered = [_canon(m["label"]) for m in metric_defs]
     score = 0.0
-    for positions in groups:
+    for gi, positions in enumerate(groups):
         theme = []
         for p in positions:
             if 1 <= p <= len(ordered):
@@ -481,7 +481,7 @@ def append_group_rows(frame, product_out, tables):
                 if n is not None:
                     theme.append(n)
         if theme:
-            score += weight * max(theme)
+            score += weights[gi] * max(theme)
     inh = {c: "" for c in cols}
     inh[ctry_col] = GROUP_COUNTRY
     inh[lab_col] = C.FINAL_LABEL
@@ -627,18 +627,20 @@ def _trace_group_product(frame, product, tables):
 
     # inherent
     groups = C.AGG_GROUPS.get(product, [])
-    weight = (1.0 / len(groups)) if (C.NORMALISE_WEIGHTS and groups) else C.W6
+    weights = C.theme_weights(product)
     ordered = [_canon(mm["label"]) for mm in metric_defs]
-    score, idetail = 0.0, [(f"theme weight = {weight:.4f}  (1bii excluded)", "")]
-    for positions in groups:
+    score, idetail = 0.0, [("per-theme weights = " + ", ".join(f"{w:.4f}" for w in weights) + "  (1bii excluded)", "")]
+    for gi, positions in enumerate(groups):
+        w = weights[gi]
         labs = [ordered[p - 1] for p in positions if 1 <= p <= len(ordered)]
         pairs = [(lb, group_num.get(lb)) for lb in labs if lb not in INHERENT_EXCLUDE_CANON]
         valid = [n for _, n in pairs if n is not None]
         mx = max(valid) if valid else None
         if mx is not None:
-            score += weight * mx
-        idetail.append((f"theme {labs}: max risk = {mx}", (round(weight * mx, 4) if mx is not None else 0)))
-    entries.append({"label": C.FINAL_LABEL, "kind": "inherent (worst per theme x weight)",
+            score += w * mx
+        idetail.append((f"theme {labs}: max risk = {mx}  x  weight {w:.4f}",
+                        (round(w * mx, 4) if mx is not None else 0)))
+    entries.append({"label": C.FINAL_LABEL, "kind": "inherent (max per theme x weight)",
                     "value": round(score, 4), "rating": _score_to_rating(score if score else None),
                     "number": "", "detail": idetail + [("score", round(score, 4))]})
     return entries
@@ -646,7 +648,7 @@ def _trace_group_product(frame, product, tables):
 
 def inherent_trace(frames):
     """Per product, per country (and GROUP): the Calculated Inherent derivation -
-    each theme's member labels, the worst (max) risk number in it, x the theme
+    each theme's member labels, the max (highest) risk number in it, x the theme
     weight, summed, then banded to a rating.  1bii is excluded."""
     out = {}
     for name, frame in frames.items():

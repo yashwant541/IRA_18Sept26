@@ -96,18 +96,18 @@ def final_assessment(product_out: str, per_metric: Dict[str, Any],
     numbers = [per_metric[m["id"]]["number"] for m in metric_defs]
 
     groups = C.AGG_GROUPS.get(product_out, [])
-    weight = (1.0 / len(groups)) if (C.NORMALISE_WEIGHTS and groups) else C.W6
+    weights = C.theme_weights(product_out)
 
     score = 0.0
     contributions = []
-    for positions in groups:
+    for gi, positions in enumerate(groups):
         vals = [numbers[p - 1] for p in positions
                 if 1 <= p <= len(numbers) and numbers[p - 1] is not None]
         if not vals:
             contributions.append(None)
             continue
         agg = max(vals)
-        score += weight * agg
+        score += weights[gi] * agg
         contributions.append(agg)
 
     if score >= 4.5:

@@ -456,13 +456,35 @@ def _wealth_pair(ctx):
 # to instead divide by the actual group count per category (so every category
 # sums to 100%).
 W6 = 1.0 / 6.0
-NORMALISE_WEIGHTS = True   # inherent weight = 1/#themes per product:
-#   Secured & Unsecured have 6 themes -> 1/6 = 16.7%; the other four products
-#   have 5 themes -> 1/5 = 20%.
+W5 = 0.2
+NORMALISE_WEIGHTS = True   # (kept for the fallback path; explicit THEME_WEIGHTS win)
+
+# Per-theme weight for the Calculated Inherent score, one weight per AGG_GROUPS
+# theme, in order.  Secured & Unsecured: six themes x 1/6 (16.7%).  The other
+# four products: five themes x 0.2 (20%) - EXCEPT SME Banking's (1g,1h) theme,
+# which is 1/6 per the definitive formula.
+THEME_WEIGHTS = {
+    "Secured":                          [W6, W6, W6, W6, W6, W6],
+    "Unsecured":                        [W6, W6, W6, W6, W6, W6],
+    "SME Banking":                      [W5, W5, W5, W5, W5],
+    "Wealth Lending":                   [W5, W5, W5, W5, W5],
+    "Wealth Lending - Retail Banking":  [W5, W5, W5, W5, W5],
+    "Wealth Lending - PvB":             [W5, W5, W5, W5, W5],
+}
+
+
+def theme_weights(product):
+    """Per-theme inherent weights for a product (one per AGG_GROUPS theme).
+    Falls back to a uniform 1/#themes when no explicit vector is defined."""
+    g = AGG_GROUPS.get(product, [])
+    tw = THEME_WEIGHTS.get(product)
+    if tw and len(tw) == len(g):
+        return list(tw)
+    return [1.0 / len(g)] * len(g) if g else []
 
 AGG_GROUPS: Dict[str, List[List[int]]] = {
     # Secured (13 labels)
-    "Secured": [[1], [2, 3, 4, 5], [6, 7, 8], [9], [10], [11, 12, 13]],
+    "Secured": [[1], [2, 3, 4, 5], [6, 7], [8], [9], [10, 11, 12, 13]],
     # Unsecured (11 labels)
     "Unsecured": [[1], [2, 3, 4, 5], [6, 7], [8], [9], [10, 11]],
     # SME Banking (12 labels)

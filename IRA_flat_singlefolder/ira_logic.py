@@ -384,7 +384,7 @@ def _group_trace_sheet(wb, frames, tables):
 
 def _inherent_shortfall_sheet(wb, frames, tables):
     """'Inherent & Shortfall trace': how each Calculated Inherent row is built
-    (theme -> worst risk x weight -> sum -> rating), and the shortfall arithmetic."""
+    (theme -> max risk x weight -> sum -> rating), and the shortfall arithmetic."""
     try:
         from . import ira_group as G
     except ImportError:
@@ -394,7 +394,7 @@ def _inherent_shortfall_sheet(wb, frames, tables):
     S = _styling()
     ws = wb.create_sheet("Inherent & Shortfall trace")
     ws["A1"] = "Inherent & Shortfall trace"; ws["A1"].font = S["TITLE"]
-    ws["A2"] = ("Calculated Inherent = worst (max) risk number in each theme x the theme weight, "
+    ws["A2"] = ("Calculated Inherent = max (highest) risk number in each theme x the theme weight, "
                 "summed (1bii excluded), then banded. Shortfall = (securities + real-estate)/1000 / ENR PvB.")
     ws["A2"].font = S["BODY"]
     heads = ["Product / Country", "Detail", "Value", "Rating", "Risk No."]
@@ -432,7 +432,7 @@ def _inherent_shortfall_sheet(wb, frames, tables):
             band(r, 5, "")
             r += 1
             for labs, mx, contrib in e["themes"]:
-                band(r, 2, f"theme {labs}: worst risk = {mx}  x  weight {e['weight']:.4f}")
+                band(r, 2, f"theme {labs}: max risk = {mx}  x  weight {e['weight']:.4f}")
                 band(r, 3, contrib)
                 r += 1
             band(r, 2, "weighted sum (score)"); band(r, 3, e["score"]); r += 1
@@ -508,7 +508,7 @@ def build_logic_workbook(frames, intermediates, tables=None) -> bytes:
         ("Step 3 VALUE - compute the metric (YoY %, deterioration in pp, a ratio, or a point-in-time reading).", ""),
         ("Step 4 RISK RATING - pass the value through that label's ladder -> Very Low .. Very High.", ""),
         ("Step 5 RISK NUMBER - Very Low=1, Low=2, Medium=3, High=4, Very High=5 (blank if N/A).", ""),
-        ("Step 6 CALCULATED - group the labels, take each group's worst number, weight and sum -> the rating.", ""),
+        ("Step 6 CALCULATED - group the labels, take each group's max (highest) number, weight and sum -> the rating.", ""),
         ("", ""),
         ("Step 7 GROUP - each product also gets Country='GROUP' rows: table operations", ""),
         ("        (ratio-of-totals over ALL countries) for the deterioration/policy/LTV/", ""),
@@ -706,7 +706,7 @@ def _reference_sheets(wb, S, hdr, row):
     ws = wb.create_sheet("4. Final score")
     ws["A1"] = "4. Calculated Inherent Credit Risk Assessment"; ws["A1"].font = S["TITLE"]
     txt = [
-        ("Each group contributes its worst (max) risk number; score = SUM over groups of (1/6 x max).", "b"),
+        ("Each group contributes its max (highest) risk number; score = SUM over groups of (1/6 x max).", "b"),
         ("score >= 4.5 Very High | >= 3.5 High | >= 2.5 Medium | >= 1.5 Low | else Very Low", "b"),
         ("(comparison uses the un-rounded score; a value that displays 1.5 but is 1.4999.. rates Very Low).", ""),
         ("", ""),
@@ -788,7 +788,7 @@ def _reference_sheets(wb, S, hdr, row):
         ("Each GROUP row is tagged in the output ('GROUP table operation (all countries)' or", ""),
         ("'GROUP ENR-weighted (country %)') so you can see which rule produced it.", ""),
         ("", ""),
-        ("GROUP inherent: same theme groups as sheet 4; take the worst (max) GROUP risk", "sub"),
+        ("GROUP inherent: same theme groups as sheet 4; take the max (highest) GROUP risk", "sub"),
         ("number in each theme, x the theme weight, summed - with 1bii excluded.", ""),
     ]
     for t, k in tail:
