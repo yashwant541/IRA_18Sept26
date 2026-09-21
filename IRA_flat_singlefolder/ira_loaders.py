@@ -220,42 +220,73 @@ def parse_wm_shortfall(rows: List[List[Any]]) -> Dict[str, Dict[str, float]]:
         out = {}
         if title_row is None:
             return out
-        # locate the header row (has a 'Total Amount' cell) within a few rows below
-        chdr = None
-        for r in range(title_row + 1, min(title_row + 7, len(rows))):
-            if any(isinstance(cell(r, c), str) and "total amount" in str(cell(r, c)).lower()
-                   for c in range(len(rows[r]))):
-                chdr = r
-                break
-        if chdr is None:
-            chdr = title_row + 2
-        sub = chdr + 1                                   # Clients / Amount sub-header
-        amt_cols, total_amt_col = {}, None
-        width = max((len(rows[r]) for r in (chdr, sub) if r < len(rows)), default=0)
-        for c in range(width):
-            head, s = cell(chdr, c), cell(sub, c)
-            if isinstance(head, str) and "total amount" in head.lower():
-                total_amt_col = c
-            if isinstance(s, str) and s.strip().lower() == "amount":
-                # country name usually sits on the Amount column header; if blank,
-                # fall back to the paired 'Clients' column to its left.
-                name = head if (isinstance(head, str) and head.strip()) else cell(chdr, c - 1)
-                if isinstance(name, str) and name.strip() and "total amount" not in name.lower():
-                    amt_cols[name.strip()] = c
-        # the 'Total' row: first row below the sub-header whose leading cells say Total
+        # 1) the 'Total' row: label 'Total' (or 'Total Shortfall') in the first
+        #    few columns AND carrying numeric data (so a split 'Total client' /
+        #    'Total Amount' header cell is never mistaken for the total row).
         total_row = None
-        for r in range(sub + 1, min(sub + 25, len(rows))):
-            if any(isinstance(cell(r, c), str) and str(cell(r, c)).strip().lower() == "total"
-                   for c in range(min(4, len(rows[r])))):
+        for r in range(title_row + 1, min(title_row + 30, len(rows))):
+            has_total = any(isinstance(cell(r, c), str) and str(cell(r, c)).strip().lower() in ("total", "total shortfall")
+                            for c in range(min(4, len(rows[r]))))
+            has_num = any(num_cell(cell(r, c)) is not None for c in range(len(rows[r])))
+            if has_total and has_num:
                 total_row = r
                 break
-        if total_row is not None:
-            if total_amt_col is not None:
-                out["__total__"] = num_cell(cell(total_row, total_amt_col))
-            for country, c in amt_cols.items():
-                val = num_cell(cell(total_row, c))
-                if val is not None:
-                    out[country] = val
+        if total_row is None:
+            return out
+        # 2) the sub-header row that labels the Clients/Amount pairs: the LAST row
+        #    above the Total row carrying exact 'Amount' cells.
+        sub = None
+        for r in range(title_row + 1, total_row):
+            if any(isinstance(cell(r, c), str) and str(cell(r, c)).strip().lower() == "amount"
+                   for c in range(len(rows[r]))):
+                sub = r
+        if sub is None:
+            sub = min(title_row + 2, total_row - 1)
+        # 3) header window = every row from just under the title down to the
+        #    sub-header; a column's header is those cells joined (so a header split
+        #    across rows - 'Total' above 'Amount' - reads as one string).
+        hwin = list(range(title_row + 1, sub + 1))
+        width = max((len(rows[r]) for r in hwin + [total_row]), default=0)
+
+        def combined(c):
+            parts = [str(cell(r, c)).strip() for r in hwin
+                     if isinstance(cell(r, c), str) and str(cell(r, c)).strip()]
+            return " ".join(parts).lower()
+
+        # 4) Total-Amount column (the GROUP figure): header holds BOTH 'total' and
+        #    'amount' but not 'client' (so 'Total client' is skipped).
+        total_amt_col = None
+        for c in range(width):
+            cm = combined(c)
+            if "total" in cm and "amount" in cm and "client" not in cm:
+                total_amt_col = c
+                break
+        # 5) per-country Amount columns: sub-header cell == 'amount'; the country
+        #    name is the nearest non-label header cell in this column, else in the
+        #    paired 'Clients' column to its left.
+        amt_cols = {}
+        _labels = {"amount", "clients", "client", "total", "usd'000", "(usd'000)"}
+        for c in range(width):
+            s = cell(sub, c)
+            if not (isinstance(s, str) and s.strip().lower() == "amount"):
+                continue
+            name = None
+            for src in (c, c - 1):
+                for r in hwin:
+                    v = cell(r, src)
+                    if isinstance(v, str) and v.strip() and v.strip().lower() not in _labels:
+                        name = v.strip()
+                if name:
+                    break
+            if name and "total" not in name.lower() and c != total_amt_col:
+                amt_cols[name] = c
+        # 6) read the figures off the Total row
+        if total_amt_col is not None:
+            out["__total__"] = num_cell(cell(total_row, total_amt_col))
+        for country, c in amt_cols.items():
+            val = num_cell(cell(total_row, c))
+            if val is not None:
+                out[country] = val
         return out
 
     sec = parse_table(find_title("securities") or find_title("securit") or find_title("margin"))
