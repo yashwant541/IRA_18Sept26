@@ -382,6 +382,9 @@ _RATING_FORMULAS["Wealth Lending - Retail Banking"] = _RATING_FORMULAS["Wealth L
 _RATING_FORMULAS["Wealth Lending - PvB"] = _RATING_FORMULAS["Wealth Lending"]
 
 _FORMULA_COL = "Risk Rating Formula"
+_WL_FAM = {"Wealth Lending", "Wealth Lending - Retail Banking", "Wealth Lending - PvB"}
+_WL_GROUP_DET = ('=IF(AND(cur>0.25%,prior>0.25%),"Very High",IF(AND(cur>0.06%,prior>0.06%),"High",'
+                 'IF(AND(cur>0.04%,prior>0.04%),"Medium",IF(AND(cur>0.01%,prior>0.01%),"Low","Very Low"))))')
 
 
 def _canon_label(label) -> str:
@@ -389,21 +392,26 @@ def _canon_label(label) -> str:
     return m.group(1) if m else ""
 
 
-def rating_formula_for(product: str, label) -> str:
-    """The Risk Rating formula documented for one (product, label)."""
+def rating_formula_for(product: str, label, country="") -> str:
+    """The Risk Rating formula documented for one (product, label). Wealth GROUP
+    1bi/1bii use the granular pair ladder."""
     if str(label).strip().lower().startswith("calculated"):
         return _CALC
-    table = _RATING_FORMULAS.get(product, {})
-    return table.get(_canon_label(label), "")
+    canon = _canon_label(label)
+    if str(country) == "GROUP" and product in _WL_FAM and canon in ("1bi", "1bii"):
+        return _WL_GROUP_DET
+    return _RATING_FORMULAS.get(product, {}).get(canon, "")
 
 
 def attach_rating_formula(df: "pd.DataFrame", product: str) -> "pd.DataFrame":
     """Return a copy of an output frame with a 'Risk Rating Formula' column
-    appended (documentation of the ladder used for each label). Download only -
-    this is never added to the frames the app renders."""
+    appended LAST (documentation of the ladder used for each label). Download
+    only - never added to the frames the app renders."""
     if df is None or df.empty or _FORMULA_COL in df.columns:
         return df
     out = df.copy()
     lab_col = "Label" if "Label" in out.columns else out.columns[min(1, len(out.columns) - 1)]
-    out[_FORMULA_COL] = out[lab_col].map(lambda lb: rating_formula_for(product, lb))
+    ctry_col = "Country" if "Country" in out.columns else out.columns[0]
+    out[_FORMULA_COL] = [rating_formula_for(product, lb, ct)
+                         for lb, ct in zip(out[lab_col], out[ctry_col])]
     return out

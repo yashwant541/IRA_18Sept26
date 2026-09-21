@@ -184,7 +184,10 @@ def parse_wm_shortfall(rows: List[List[Any]]) -> Dict[str, Dict[str, float]]:
     table's per-country figure is the 'Amount' column of its 'Total' row, and
     '__total__' is the 'Total Amount' column of that same row."""
     def cell(r, c):
-        return rows[r][c] if 0 <= r < len(rows) and 0 <= c < len(rows[r]) else None
+        v = rows[r][c] if 0 <= r < len(rows) and 0 <= c < len(rows[r]) else None
+        if isinstance(v, float) and v != v:      # pandas NaN -> treat as blank
+            return None
+        return v
 
     def num_cell(v):
         """Coerce a shortfall amount to a number: handles ints/floats, and text

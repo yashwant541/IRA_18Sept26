@@ -79,6 +79,11 @@ DET_FAMILY = {
     "Wealth Lending": "Wealth", "Wealth Lending - Retail Banking": "Wealth",
     "Wealth Lending - PvB": "Wealth",
 }
+# GROUP-only override: at GROUP the Wealth 1bi/1bii pair uses the granular
+# (Unsecured-style) ladder - >0.25% VH, >0.06% H, >0.04% M, >0.01% L, else VL -
+# rather than the per-country Wealth ladder.
+GROUP_DET_PAIR = {"Wealth": [(0.0025, "Very High"), (0.0006, "High"),
+                             (0.0004, "Medium"), (0.0001, "Low"), (None, "Very Low")]}
 # DPD$ numerator (table, product line) for 1bi/1bii/1c
 DPD_LINES = {
     "Secured": ("90+$", "Consumer Secured"),
@@ -290,9 +295,11 @@ def _ratio_value(tables, product, int_key) -> Optional[float]:
         wm = tables.get("wm_shortfall") or {}
         sec = _num((wm.get("securities") or {}).get("__total__"))
         re_ = _num((wm.get("real_estate") or {}).get("__total__"))
-        if sec is None and re_ is None:
+        # real-estate total missing -> leave blank so the Missing-Data step can
+        # surface it for a manual value (rather than silently using securities only).
+        if sec is None or re_ is None:
             return None
-        total = (sec or 0) + (re_ or 0)
+        total = sec + re_
         enr = tables.get("ENR")
         den = _sum_product_at(enr, "PvB", _at(_months(enr), 0))
         if not den:
@@ -425,7 +432,7 @@ def append_group_rows(frame, product_out, tables):
         if canon == "1c":
             return C.r_deterioration(value, C.DET_SINGLE[fam])
         ctx = {"1bi": dpd_group.get("1bi"), "1bii": dpd_group.get("1bii")}
-        return C.r_deterioration_pair(ctx, C.DET_PAIR[fam])
+        return C.r_deterioration_pair(ctx, GROUP_DET_PAIR.get(fam, C.DET_PAIR[fam]))
 
     group_num: Dict[str, Optional[int]] = {}
     group_rows: List[Dict[str, Any]] = []
@@ -444,6 +451,9 @@ def append_group_rows(frame, product_out, tables):
             display = _fmt_pct(val)
             number = E.RISK_NUMBER.get(rating) if rating else None
             note = "GROUP table operation (all countries)"
+            if int_key == "shortfall" and val is None:
+                rating = "Not Available"; number = None
+                note = "Not Available - real estate/securities total not found; enter manually"
         else:
             ov = WEIGHT_OVERRIDE.get((product_out, canon))
             w = _weights(tables, product_out, countries, lines=ov) if ov else weights
@@ -566,7 +576,7 @@ def _trace_group_product(frame, product, tables):
         if canon == "1c":
             return C.r_deterioration(value, C.DET_SINGLE[fam])
         ctx = {"1bi": dpd_group.get("1bi"), "1bii": dpd_group.get("1bii")}
-        return C.r_deterioration_pair(ctx, C.DET_PAIR[fam])
+        return C.r_deterioration_pair(ctx, GROUP_DET_PAIR.get(fam, C.DET_PAIR[fam]))
 
     group_num, entries = {}, []
     for m in metric_defs:
