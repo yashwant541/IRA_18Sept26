@@ -1,1 +1,0 @@
-=IF(AND(D38>0.25%,D39>0.25%),"Very High",IF(AND(D38>0.06%,D39>0.06%),"High",IF(AND(D38>0.04%,D39>0.04%),"Medium",IF(AND(D38>0.01%,D39>0.01%),"Low","Very Low"))))
