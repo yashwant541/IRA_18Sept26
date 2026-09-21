@@ -674,7 +674,10 @@ def _ppi_yoy(tables, country):
 
 
 def _interest_inc(tables, country):
-    """2a: (current-month rate - last-3-years average) / 100, per the mapping."""
+    """2a: (current-month rate - last-3-years average) / 100.
+    The 3-year window is anchored on the latest month's DATE (not a blind
+    36-row slice): it includes every month whose date falls within the 3 years
+    up to and including the latest month, so gaps or extra history can't skew it."""
     ir = tables.get("interest_rates")
     if ir is None:
         return None, "Interest Rates table missing/empty", {}
@@ -682,7 +685,22 @@ def _interest_inc(tables, country):
     if not s:
         return None, f"no interest-rate column for {country}", {}
     months = ir.months
-    win = months[-36:] if len(months) >= 36 else months     # last 3 years
+    import pandas as pd
+
+    def _d(m):
+        try:
+            return pd.to_datetime(m)
+        except Exception:
+            return None
+
+    last_d = _d(months[-1]) if months else None
+    if last_d is not None:
+        cutoff = last_d - pd.DateOffset(years=3)        # 3 years before the latest month
+        win = [m for m in months if (_d(m) is not None and _d(m) > cutoff)]
+        if not win:
+            win = months[-36:] if len(months) >= 36 else months
+    else:                                               # non-date labels: safe fallback
+        win = months[-36:] if len(months) >= 36 else months
     vals = [s.get(m) for m in win if s.get(m) is not None]
     if not vals:
         return None, "interest-rate column has no values", {}
@@ -692,7 +710,9 @@ def _interest_inc(tables, country):
         return None, "current-month interest rate missing", {"avg_3yr": round(avg, 6)}
     return (last - avg) / 100.0, "", {"current": round(last, 4),
                                       "avg_3yr": round(avg, 4),
-                                      "basis": "(current - 3yr avg)/100"}
+                                      "window_start": str(win[0]) if win else None,
+                                      "window_months": len(win),
+                                      "basis": "(current - last-3-years avg)/100"}
 
 
 def _sovereign(tables, country):

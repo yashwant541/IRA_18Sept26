@@ -151,6 +151,7 @@ _COUNTRY_ALIASES = {
     "southkorea": "korea", "republicofkorea": "korea", "koreasouth": "korea",
     "unitedarabemirates": "uae", "usa": "unitedstates", "us": "unitedstates",
     "uk": "unitedkingdom", "greatbritain": "unitedkingdom",
+    "bruneidarussalam": "brunei",
 }
 # org suffixes that should be stripped from a country label (e.g. "Korea SCBK")
 _COUNTRY_SUFFIXES = ("scbk", "sc", "plc", "ltd", "bank")
