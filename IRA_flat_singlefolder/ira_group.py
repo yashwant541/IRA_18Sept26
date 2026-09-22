@@ -114,8 +114,14 @@ PRODUCTS = set(CATEGORY_ENR_LINES)
 # reused for 1d, 1h, 1i, 2a and 2b.  (Table-op labels 1bi/1bii/1c/1e/1f/1g are
 # unaffected, and per-country SME calculations are unaffected - GROUP only.)
 _SME_GROUP_WEIGHTED = ("1a", "1d", "1h", "1i", "2a", "2b")
-WEIGHT_OVERRIDE = {("SME Banking", c): ["SME Banking", "ME"]
-                   for c in _SME_GROUP_WEIGHTED}
+# Wealth Lending - PvB GROUP: every ENR-weighted label weights on the PvB ENR
+# line ALONE (its own exposure %), not Wealth Banking + PvB.  (Table-op labels
+# 1bi/1bii/1c/1f are unaffected; per-country PvB is unaffected - GROUP only.)
+_PVB_GROUP_WEIGHTED = ("1a", "1d", "1e", "1g", "1h", "1i", "2a", "2b")
+WEIGHT_OVERRIDE = {**{("SME Banking", c): ["SME Banking", "ME"]
+                      for c in _SME_GROUP_WEIGHTED},
+                   **{("Wealth Lending - PvB", c): ["PvB"]
+                      for c in _PVB_GROUP_WEIGHTED}}
 
 
 # --------------------------------------------------------------------------- #
@@ -444,12 +450,17 @@ def append_group_rows(frame, product_out, tables):
         return C.r_deterioration_pair(ctx, GROUP_DET_PAIR.get(fam, C.DET_PAIR[fam]))
 
     group_num: Dict[str, Optional[int]] = {}
+    # GROUP Calculated Inherent: ENR-weighted labels contribute their continuous
+    # weighted-sum VALUE (not the rounded risk number); table-op labels contribute
+    # their risk number.  group_val holds whichever applies, per label.
+    group_val: Dict[str, Optional[float]] = {}
     group_rows: List[Dict[str, Any]] = []
     for m in metric_defs:
         canon = _canon(m["label"])
         int_key = getattr(m.get("value"), "int_key", m.get("value"))
         if (not int_key) and canon in CANON_TO_DPD:
             int_key = CANON_TO_DPD[canon]     # PvB deterioration -> Wealth 30+$ op
+        wsum = None
         if int_key in table_ops:
             if int_key in _DPD:
                 val = dpd_group.get(canon)
@@ -476,6 +487,9 @@ def append_group_rows(frame, product_out, tables):
                 display = round(wsum, 3)
             note = "GROUP ENR-weighted (country %; basis: " + " + ".join(lines) + ")"
         group_num[canon] = number
+        # table-op -> risk number; ENR-weighted -> its displayed weighted-sum value
+        group_val[canon] = number if (int_key in table_ops) else \
+            (round(wsum, 3) if wsum is not None else None)
         row = {c: "" for c in cols}
         row[ctry_col] = GROUP_COUNTRY
         row[lab_col] = m["label"]
@@ -497,7 +511,7 @@ def append_group_rows(frame, product_out, tables):
                 canon = ordered[p - 1]
                 if canon in INHERENT_EXCLUDE_CANON:
                     continue
-                n = group_num.get(canon)
+                n = group_val.get(canon)
                 if n is not None:
                     theme.append(n)
         if theme:
@@ -588,13 +602,14 @@ def _trace_group_product(frame, product, tables):
         ctx = {"1bi": dpd_group.get("1bi"), "1bii": dpd_group.get("1bii")}
         return C.r_deterioration_pair(ctx, GROUP_DET_PAIR.get(fam, C.DET_PAIR[fam]))
 
-    group_num, entries = {}, []
+    group_num, group_val, entries = {}, {}, []
     for m in metric_defs:
         canon = _canon(m["label"])
         int_key = getattr(m.get("value"), "int_key", m.get("value"))
         if (not int_key) and canon in CANON_TO_DPD:
             int_key = CANON_TO_DPD[canon]
         detail = []
+        wsum = None
         if int_key in table_ops:
             kind = "table operation (all countries)"
             if int_key in _DPD:
@@ -645,6 +660,8 @@ def _trace_group_product(frame, product, tables):
                 detail.append(("weighted sum", round(wsum, 4)))
                 detail.append((f"rounded to nearest 1..5", number))
         group_num[canon] = number
+        group_val[canon] = number if (int_key in table_ops) else \
+            (round(wsum, 3) if wsum is not None else None)
         entries.append({"label": m["label"], "kind": kind, "value": display,
                         "rating": rating, "number": number, "detail": detail})
 
@@ -652,16 +669,19 @@ def _trace_group_product(frame, product, tables):
     groups = C.AGG_GROUPS.get(product, [])
     weights = C.theme_weights(product)
     ordered = [_canon(mm["label"]) for mm in metric_defs]
-    score, idetail = 0.0, [("per-theme weights = " + ", ".join(f"{w:.4f}" for w in weights) + "  (1bii excluded)", "")]
+    score, idetail = 0.0, [("per-theme weights = " + ", ".join(f"{w:.4f}" for w in weights) +
+                            "  (1bii excluded; ENR-weighted labels use their weighted-sum VALUE, "
+                            "table-op labels their risk number)", "")]
     for gi, positions in enumerate(groups):
         w = weights[gi]
         labs = [ordered[p - 1] for p in positions if 1 <= p <= len(ordered)]
-        pairs = [(lb, group_num.get(lb)) for lb in labs if lb not in INHERENT_EXCLUDE_CANON]
+        pairs = [(lb, group_val.get(lb)) for lb in labs if lb not in INHERENT_EXCLUDE_CANON]
         valid = [n for _, n in pairs if n is not None]
         mx = max(valid) if valid else None
         if mx is not None:
             score += w * mx
-        idetail.append((f"theme {labs}: max risk = {mx}  x  weight {w:.4f}",
+        mxs = (round(mx, 4) if isinstance(mx, float) else mx)
+        idetail.append((f"theme {labs}: max (value/risk) = {mxs}  x  weight {w:.4f}",
                         (round(w * mx, 4) if mx is not None else 0)))
     entries.append({"label": C.FINAL_LABEL, "kind": "inherent (max per theme x weight)",
                     "value": round(score, 4), "rating": _score_to_rating(score if score else None),

@@ -370,9 +370,15 @@ def _build_wealth_family(tables, countries_per_category, put):
         for prod in WL_PRODUCTS:
             put("policy_exc_rate", country, prod, v, why, comp)
 
-        # ---- 1h dispensations: same for all three (Wealth Lending table) --- #
-        v, why = _dispensations(tables, country, "Wealth Lending")
+        # ---- 1h dispensations: individual table per Wealth product -------- #
+        #   WL -> Wealth Lending, WL_Retail -> Retail Banking, WL_PvB -> PvB.
+        #   Falls back to the shared Wealth Lending table if a sub-table is absent.
         for prod in WL_PRODUCTS:
+            v, why = _dispensations(tables, country, prod)
+            if v is None and prod != WL_TOTAL:
+                v2, why2 = _dispensations(tables, country, WL_TOTAL)
+                if v2 is not None:
+                    v, why = v2, (why2 + "  [fallback: shared Wealth Lending table]")
             put("dispensations", country, prod, v, why, {})
 
         # ---- 1i CRA breaches: all three Wealth products (ENR-weighted GROUP) --
