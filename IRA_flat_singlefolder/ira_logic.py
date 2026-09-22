@@ -338,7 +338,9 @@ def _group_trace_sheet(wb, frames, tables):
     ws["A1"] = "GROUP calc trace - the full arithmetic behind every Country='GROUP' row"
     ws["A1"].font = S["TITLE"]
     ws["A2"] = ("Table-operation labels sum over ALL countries; ENR-weighted labels list each "
-                "config country's (risk number x ENR weight). Weight = country ENR / total ENR over all countries.")
+                "config country's (risk number x ENR weight). Weight = country ENR / total ENR over all "
+                "countries; the ENR line(s) forming the basis are named per label (e.g. SME Banking GROUP "
+                "weights 1a, 1d, 1h, 1i, 2a, 2b on SME Banking + ME).")
     ws["A2"].font = S["BODY"]
     heads = ["Product / Label", "Detail", "Value", "Rating", "Risk No."]
     widths = [44, 46, 16, 12, 9]

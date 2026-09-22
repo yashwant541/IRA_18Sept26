@@ -466,6 +466,7 @@ def append_group_rows(frame, product_out, tables):
         else:
             ov = WEIGHT_OVERRIDE.get((product_out, canon))
             w = _weights(tables, product_out, countries, lines=ov) if ov else weights
+            lines = ov or CATEGORY_ENR_LINES[product_out]
             wsum = _weighted_number(num_maps.get(canon, {}), w)
             if wsum is None:
                 number, rating, display = None, "", ""
@@ -473,7 +474,7 @@ def append_group_rows(frame, product_out, tables):
                 number = min(5, max(1, _round_half_up(wsum)))
                 rating = _NUM_TO_RATING[number]
                 display = round(wsum, 3)
-            note = "GROUP ENR-weighted (country %)"
+            note = "GROUP ENR-weighted (country %; basis: " + " + ".join(lines) + ")"
         group_num[canon] = number
         row = {c: "" for c in cols}
         row[ctry_col] = GROUP_COUNTRY
@@ -618,13 +619,16 @@ def _trace_group_product(frame, product, tables):
             display = _fmt_pct(val)
             number = E.RISK_NUMBER.get(rating) if rating else None
         else:
-            kind = "ENR-weighted (country %)"
             ov = WEIGHT_OVERRIDE.get((product, canon))
             w = _weights(tables, product, countries, lines=ov) if ov else weights
             lines = ov or CATEGORY_ENR_LINES[product]
+            basis = " + ".join(lines)
+            kind = "ENR-weighted (country %; basis: " + basis + ")"
             total = _sum_lines_at(enr, lines, _at(_months(enr), 0))
             wsum = _weighted_number(num_maps.get(canon, {}), w)
-            detail.append((f"total ENR (all countries) = weight denominator", round(total, 2) if total else total))
+            detail.append(("weight basis (ENR line" + ("s" if len(lines) > 1 else "") + ") = " + basis, ""))
+            detail.append(("total " + basis + " ENR (all countries) = weight denominator",
+                           round(total, 2) if total else total))
             for c in countries:
                 rn = num_maps.get(canon, {}).get(c)
                 wt = w.get(c)
