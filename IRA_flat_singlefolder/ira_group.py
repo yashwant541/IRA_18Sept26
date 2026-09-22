@@ -108,9 +108,14 @@ TABLE_OP_KEYS = {
 }
 PRODUCTS = set(CATEGORY_ENR_LINES)
 
-# per-(product, canon) ENR-line override for the weighted method.  SME 1a weights
-# on SME Banking + ME (the same combined ENR its per-country YoY value uses).
-WEIGHT_OVERRIDE = {("SME Banking", "1a"): ["SME Banking", "ME"]}
+# per-(product, canon) ENR-line override for the weighted method.
+# SME Banking GROUP: every ENR-weighted label uses the SAME combined
+# SME Banking + ME exposure % that 1a uses - i.e. 1a's country weights are
+# reused for 1d, 1h, 1i, 2a and 2b.  (Table-op labels 1bi/1bii/1c/1e/1f/1g are
+# unaffected, and per-country SME calculations are unaffected - GROUP only.)
+_SME_GROUP_WEIGHTED = ("1a", "1d", "1h", "1i", "2a", "2b")
+WEIGHT_OVERRIDE = {("SME Banking", c): ["SME Banking", "ME"]
+                   for c in _SME_GROUP_WEIGHTED}
 
 
 # --------------------------------------------------------------------------- #
@@ -155,10 +160,14 @@ def _round_half_up(x: float) -> int:
 def _score_to_rating(score: Optional[float]) -> str:
     if score is None or score == "":
         return ""
-    if score >= 4.5: return "Very High"
-    if score >= 3.5: return "High"
-    if score >= 2.5: return "Medium"
-    if score >= 1.5: return "Low"
+    fn = getattr(C, "inherent_band", None)
+    if fn is not None:                       # canonical banding (rounds first)
+        return fn(score)
+    s = round(float(score), 4)               # fallback: round before comparing
+    if s >= 4.5: return "Very High"
+    if s >= 3.5: return "High"
+    if s >= 2.5: return "Medium"
+    if s >= 1.5: return "Low"
     return "Very Low"
 
 

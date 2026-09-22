@@ -482,6 +482,31 @@ def theme_weights(product):
         return list(tw)
     return [1.0 / len(g)] * len(g) if g else []
 
+
+# Decimal places used for BOTH the displayed Calculated Inherent score and the
+# band it maps to.  The two must use the same rounded value, or a score that
+# shows as e.g. 3.5 can rate one band lower.
+SCORE_DP = 4
+
+def inherent_band(score):
+    """Map a Calculated Inherent score to its rating band, rounding to SCORE_DP
+    first so the band always agrees with the value shown in the output.
+
+    Inherent scores are sums of (theme max x theme weight); with 1/6 or 1/5
+    weights a true 3.5 (= 21/6) comes back from floating point as
+    3.4999999999999996, which a raw '>= 3.5' test would rate Medium even though
+    the cell displays 3.5.  Rounding to SCORE_DP removes that artefact without
+    reclassifying any genuine value (the nearest real scores to a boundary are a
+    sixth/fifth away, far outside rounding range).  Blank/None -> ''."""
+    if score is None or score == "":
+        return ""
+    s = round(float(score), SCORE_DP)
+    if s >= 4.5: return "Very High"
+    if s >= 3.5: return "High"
+    if s >= 2.5: return "Medium"
+    if s >= 1.5: return "Low"
+    return "Very Low"
+
 AGG_GROUPS: Dict[str, List[List[int]]] = {
     # Secured (13 labels)
     "Secured": [[1], [2, 3, 4, 5], [6, 7], [8], [9], [10, 11, 12, 13]],

@@ -110,17 +110,8 @@ def final_assessment(product_out: str, per_metric: Dict[str, Any],
         score += weights[gi] * agg
         contributions.append(agg)
 
-    if score >= 4.5:
-        rating = "Very High"
-    elif score >= 3.5:
-        rating = "High"
-    elif score >= 2.5:
-        rating = "Medium"
-    elif score >= 1.5:
-        rating = "Low"
-    else:
-        rating = "Very Low"
-    return dict(score=round(score, 4), rating=rating, contributions=contributions)
+    rating = C.inherent_band(score)
+    return dict(score=round(score, C.SCORE_DP), rating=rating, contributions=contributions)
 
 
 def _fmt_output(int_key: str, value) -> Any:
