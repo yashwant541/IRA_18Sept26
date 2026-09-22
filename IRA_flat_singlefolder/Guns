@@ -1,1 +1,2069 @@
+ROLE
 
+Act as a senior Python solution architect, Dataiku developer, banking accountant, regulatory reporting specialist, reconciliation-engine designer, and test automation engineer.
+
+Design and develop a production-grade financial reconciliation engine as a modular Python library that can be called from a Dataiku Standard WebApp.
+
+The primary purpose of the solution is to reconcile:
+
+1. One regulatory financial statement workbook.
+2. Supporting regulatory schedules.
+3. Multiple candidate trial balances.
+4. Local account mappings.
+5. Ayra semantic mappings.
+6. Iraq balance-sheet mappings.
+7. Balance-sheet, profit-and-loss, and off-balance-sheet accounts.
+8. Reported financial statement lines against TB-derived calculated amounts.
+9. Supporting schedule totals against both the TB and the main financial statement.
+
+The solution must be modular, lightweight, auditable, testable, deterministic, and reusable.
+
+Do not build a large monolithic backend.py.
+
+Do not embed accounting rules, Excel-reading logic, or reconciliation calculations directly inside the Dataiku WebApp backend.
+
+The WebApp must be a thin controller only.
+
+The complete architecture must follow:
+
+Frontend
+    ↓
+Thin Dataiku WebApp Backend
+    ↓
+Public Python Library API
+    ↓
+Specialized Library Services
+    ↓
+Ingestion, Mapping, Rules, Calculators, Schedules, Controls
+    ↓
+Reconciliation Results
+    ↓
+Dataiku Datasets, Managed Folders, and Export Files
+
+
+============================================================
+1. CORE DESIGN PRINCIPLES
+============================================================
+
+Implement the following non-negotiable principles.
+
+1. Thin WebApp
+
+The Dataiku WebApp backend must only:
+
+- receive requests;
+- validate basic request payloads;
+- identify managed folders and datasets;
+- call public library functions;
+- return compact JSON responses;
+- serve generated export files;
+- convert controlled exceptions into user-friendly API errors.
+
+The backend must not:
+
+- parse Excel workbooks;
+- detect headers;
+- normalize accounts;
+- contain hardcoded account mappings;
+- calculate fixed assets;
+- calculate schedule totals;
+- perform account clubbing;
+- calculate variances;
+- perform combination matching;
+- construct Excel export sheets.
+
+2. Framework-independent engine
+
+The core reconciliation library must not import:
+
+- Flask;
+- Dataiku;
+- Dash;
+- Django;
+- FastAPI;
+- any browser or UI library.
+
+The engine must accept:
+
+- bytes;
+- pandas DataFrames;
+- typed configuration objects;
+- mapping records;
+- source metadata.
+
+The engine must return:
+
+- typed Python result objects;
+- dictionaries;
+- pandas DataFrames;
+- JSON-compatible summaries;
+- Excel workbook bytes.
+
+3. Dataiku isolation
+
+Only the Dataiku adapter modules may import `dataiku`.
+
+All Dataiku-specific operations must be isolated behind functions such as:
+
+- read managed-folder file;
+- list managed-folder files;
+- write managed-folder file;
+- read dataset;
+- write dataset;
+- read project variables;
+- resolve folder IDs;
+- create run artifacts.
+
+4. Financial precision
+
+Use `decimal.Decimal` for financial calculations.
+
+Do not use binary floating-point arithmetic for:
+
+- source balances;
+- converted balances;
+- presented balances;
+- reported amounts;
+- variances;
+- tolerances;
+- percentages used in reconciliation decisions.
+
+Pandas may be used for filtering, joining, grouping, and tabular processing, but financial calculations must preserve Decimal precision.
+
+5. Complete audit lineage
+
+Every reported amount must be traceable to:
+
+- source filename;
+- source sheet;
+- source row;
+- source account;
+- source description;
+- original amount;
+- original unit;
+- conversion factor;
+- mapped Ayra category;
+- Iraq reporting bucket;
+- supporting schedule;
+- presentation sign;
+- calculated contribution;
+- reconciliation status;
+- mapping rationale.
+
+6. Metadata-driven accounting rules
+
+Do not hardcode all account numbers inside calculator scripts.
+
+Calculators must operate primarily on mapping metadata such as:
+
+- semantic category;
+- accounting role;
+- reporting line;
+- schedule;
+- presentation sign;
+- inclusion status;
+- effective date.
+
+Hardcoded seed mappings may be supplied through a configuration file or mapping table, not embedded throughout the codebase.
+
+7. Lightweight modules
+
+Each module must have one clear responsibility.
+
+Avoid:
+
+- god classes;
+- circular imports;
+- repeated parsing;
+- repeated Dataiku reads;
+- modules containing both business logic and API routes;
+- giant functions;
+- hidden global state.
+
+8. Deterministic matching first
+
+Use matching in this order:
+
+1. Approved account-number mapping.
+2. Approved local account group.
+3. Ayra semantic category.
+4. Iraq reporting bucket.
+5. Supporting schedule mapping.
+6. Controlled description matching.
+7. Controlled numerical combination matching.
+8. Residual investigation.
+
+Fuzzy or combination matching must never override an approved account mapping.
+
+
+============================================================
+2. TARGET LIBRARY STRUCTURE
+============================================================
+
+Create the following package under:
+
+lib/python/iraq_recon/
+
+Required structure:
+
+iraq_recon/
+    __init__.py
+    api.py
+    constants.py
+    exceptions.py
+    logging_utils.py
+
+    models/
+        __init__.py
+        source.py
+        mapping.py
+        configuration.py
+        calculation.py
+        reconciliation.py
+        validation.py
+        controls.py
+
+    adapters/
+        __init__.py
+        dataiku_io.py
+        folder_adapter.py
+        dataset_adapter.py
+
+    ingestion/
+        __init__.py
+        excel_reader.py
+        workbook_inspector.py
+        header_detector.py
+        table_detector.py
+        sheet_classifier.py
+        financial_statement_reader.py
+        trial_balance_reader.py
+        mapping_reader.py
+
+    normalization/
+        __init__.py
+        account_normalizer.py
+        description_normalizer.py
+        amount_normalizer.py
+        row_classifier.py
+        schema_normalizer.py
+        unit_normalizer.py
+
+    mapping/
+        __init__.py
+        mapping_loader.py
+        local_bridge.py
+        ayra_mapper.py
+        reporting_mapper.py
+        mapping_validator.py
+        mapping_coverage.py
+
+    rules/
+        __init__.py
+        presentation_rules.py
+        sign_rules.py
+        unit_rules.py
+        exclusion_rules.py
+        account_role_rules.py
+        tolerance_rules.py
+        formula_registry.py
+
+    calculators/
+        __init__.py
+        base.py
+        central_bank.py
+        bank_balances.py
+        investments.py
+        fixed_assets.py
+        other_assets.py
+        capital_reserves.py
+        customer_deposits.py
+        provisions.py
+        spot_position.py
+        off_balance_sheet.py
+
+    schedules/
+        __init__.py
+        base.py
+        schedule_03.py
+        schedule_04.py
+        schedule_05.py
+        currency_schedule.py
+        maturity_schedule.py
+        schedule_builder.py
+        schedule_validator.py
+
+    engine/
+        __init__.py
+        snapshot_selector.py
+        account_clubber.py
+        combination_matcher.py
+        reconciliation_engine.py
+        variance_engine.py
+        diagnostics_engine.py
+        run_context.py
+
+    controls/
+        __init__.py
+        tb_controls.py
+        mapping_controls.py
+        schedule_controls.py
+        statement_controls.py
+        off_balance_sheet_controls.py
+        control_runner.py
+
+    services/
+        __init__.py
+        inspection_service.py
+        validation_service.py
+        mapping_service.py
+        snapshot_service.py
+        reconciliation_service.py
+        review_service.py
+        export_service.py
+
+    exporters/
+        __init__.py
+        json_exporter.py
+        excel_exporter.py
+        audit_exporter.py
+        formatting.py
+
+    repositories/
+        __init__.py
+        run_repository.py
+        result_repository.py
+        in_memory_repository.py
+        dataiku_repository.py
+
+
+============================================================
+3. PUBLIC API
+============================================================
+
+Create `iraq_recon/api.py` as the only recommended entry point for the WebApp.
+
+Expose functions such as:
+
+inspect_source_file(...)
+inspect_workbook(...)
+list_workbook_sheets(...)
+validate_inputs(...)
+load_trial_balances(...)
+load_financial_statement(...)
+load_mapping_files(...)
+validate_mappings(...)
+calculate_mapping_coverage(...)
+compare_tb_snapshots(...)
+select_best_snapshot(...)
+run_reconciliation(...)
+get_run_summary(...)
+get_line_breakdown(...)
+get_account_trace(...)
+get_schedule_reconciliation(...)
+get_control_results(...)
+get_exceptions(...)
+export_reconciliation(...)
+
+The public API must hide internal module complexity.
+
+Example intended usage:
+
+from iraq_recon import api
+
+inspection = api.inspect_workbook(
+    filename=filename,
+    content=file_bytes
+)
+
+validation = api.validate_inputs(
+    configuration=config
+)
+
+snapshot_result = api.compare_tb_snapshots(
+    trial_balances=tb_sources,
+    financial_statement=statement_source,
+    mappings=mappings,
+    configuration=config
+)
+
+reconciliation = api.run_reconciliation(
+    trial_balance=selected_tb,
+    financial_statement=statement_source,
+    mappings=mappings,
+    configuration=config
+)
+
+export_bytes = api.export_reconciliation(
+    result=reconciliation,
+    export_format="xlsx"
+)
+
+Return typed result objects from the API.
+
+All typed result objects must support:
+
+- `to_dict()`
+- `summary_dict()`
+- conversion to JSON-compatible values;
+- access to detailed DataFrames where appropriate.
+
+
+============================================================
+4. DATA MODELS
+============================================================
+
+Use Python dataclasses or similarly lightweight typed models.
+
+Required models include:
+
+SourceFile
+
+Fields:
+
+- source_id;
+- filename;
+- file_type;
+- source_role;
+- content bytes or content reference;
+- reporting_date, if explicitly available;
+- source_unit;
+- metadata.
+
+SourceRow
+
+Fields:
+
+- source_file;
+- source_sheet;
+- source_row_number;
+- original_values;
+- normalized_values.
+
+TrialBalanceRecord
+
+Fields:
+
+- account_number;
+- account_description;
+- original_balance;
+- normalized_balance;
+- source_unit;
+- converted_balance;
+- source_sheet;
+- source_row;
+- statement_type;
+- natural_side;
+- row_type;
+- posting_status.
+
+MappingRecord
+
+Fields:
+
+- local_account;
+- local_description;
+- statement_type;
+- natural_side;
+- economic_role;
+- Ayra category;
+- Iraq reporting bucket;
+- financial statement line;
+- schedule code;
+- schedule row;
+- presentation sign;
+- inclusion status;
+- unit factor;
+- mapping method;
+- mapping confidence;
+- effective from;
+- effective to;
+- mapping rationale.
+
+CalculationContribution
+
+Fields:
+
+- line code;
+- account;
+- description;
+- converted amount;
+- presentation sign;
+- presented amount;
+- formula component;
+- source lineage.
+
+LineReconciliationResult
+
+Fields:
+
+- line code;
+- line description;
+- reported amount;
+- calculated amount;
+- variance;
+- absolute variance;
+- variance percentage;
+- tolerance;
+- status;
+- formula;
+- supporting accounts;
+- supporting schedule;
+- accounting explanation;
+- review required.
+
+ControlResult
+
+Fields:
+
+- control code;
+- control description;
+- expected amount;
+- actual amount;
+- variance;
+- status;
+- severity;
+- details.
+
+ReconciliationRun
+
+Fields:
+
+- run ID;
+- configuration;
+- selected TB snapshot;
+- candidate snapshot comparison;
+- line results;
+- account trace;
+- schedule results;
+- control results;
+- exceptions;
+- warnings;
+- summary.
+
+
+============================================================
+5. DATAIKU ADAPTER DESIGN
+============================================================
+
+Create `adapters/dataiku_io.py`.
+
+This is the only core integration module permitted to import `dataiku`.
+
+Provide focused functions:
+
+read_managed_folder_file(folder_id, file_path)
+list_managed_folder_files(folder_id)
+write_managed_folder_file(folder_id, file_path, content)
+read_dataiku_dataset(dataset_name, columns=None)
+write_dataiku_dataset(dataset_name, dataframe)
+read_project_variables()
+resolve_project_configuration()
+get_current_project_key()
+
+Do not allow accounting calculators to know:
+
+- folder IDs;
+- dataset names;
+- project keys;
+- WebApp routes;
+- Dataiku runtime details.
+
+Create repository classes where persistent run results are needed.
+
+Support:
+
+- in-memory repository for local and unit tests;
+- Dataiku dataset or managed-folder repository for deployed execution.
+
+Do not assume that the WebApp process should retain critical results only in Python memory.
+
+
+============================================================
+6. INGESTION DESIGN
+============================================================
+
+A. Excel reader
+
+The reader must accept:
+
+- filename;
+- workbook bytes;
+- optional sheet selection;
+- optional password or unsupported-file error handling where applicable.
+
+It must return:
+
+- workbook sheet list;
+- raw sheet grids;
+- detected tables;
+- source metadata;
+- warnings.
+
+Do not use permanent local paths unless an adapter explicitly stages a temporary file.
+
+B. Header detector
+
+The header detector must:
+
+- scan multiple candidate rows;
+- identify account-number columns;
+- identify account-description columns;
+- identify balance, debit, and credit columns;
+- score header likelihood;
+- distinguish headings from data;
+- return selected header row and confidence;
+- preserve alternative candidates for diagnostic output.
+
+Do not assume headers are on row 1.
+
+C. Table detector
+
+The table detector must:
+
+- identify used regions;
+- split tables separated by blank rows or columns where appropriate;
+- reject decorative title regions;
+- detect repeated headers;
+- retain table location metadata.
+
+D. Sheet classifier
+
+Classify sheets as:
+
+- ASSETS;
+- LIABILITIES;
+- EQUITY;
+- P_AND_L;
+- OFF_BALANCE_SHEET;
+- FINANCIAL_STATEMENT;
+- SUPPORTING_SCHEDULE;
+- MAPPING;
+- UNKNOWN.
+
+Classification must return:
+
+- selected class;
+- confidence;
+- evidence;
+- review flag.
+
+E. Financial statement reader
+
+Extract:
+
+- line code;
+- line description;
+- reported amount;
+- unit;
+- currency classification;
+- residency classification;
+- associated schedule, if identifiable;
+- source cell or source location.
+
+F. Trial balance reader
+
+Extract only source records.
+
+Do not apply financial statement mapping in the reader.
+
+
+============================================================
+7. NORMALIZATION DESIGN
+============================================================
+
+Account normalization must:
+
+- convert numeric Excel account values to stable strings;
+- remove artificial `.0`;
+- protect leading zeros where configured;
+- trim whitespace;
+- preserve the original account value;
+- reject malformed values through a controlled warning.
+
+Amount normalization must:
+
+- remove commas and spaces;
+- support parentheses as negatives;
+- support explicit negative signs;
+- handle blank and null cells;
+- distinguish zero from missing;
+- parse through Decimal;
+- preserve the original text;
+- never silently convert invalid text to zero.
+
+Description normalization must:
+
+- trim spaces;
+- normalize repeated whitespace;
+- normalize common punctuation variants;
+- create an uppercase matching form;
+- retain the original description;
+- preserve meaningful accounting terms.
+
+Row classification must identify:
+
+- POSTING;
+- PARENT;
+- SUBTOTAL;
+- TOTAL;
+- GRAND_TOTAL;
+- HEADER;
+- BLANK;
+- TEMPLATE;
+- UNKNOWN.
+
+Parent and control rows must not be added to their detailed child balances unless explicitly marked as independently posting.
+
+
+============================================================
+8. THREE-LEVEL MAPPING DESIGN
+============================================================
+
+Use three mapping levels.
+
+Level 1: Local account bridge
+
+Local Iraqi account
+    ↓
+Local accounting meaning
+    ↓
+Ayra semantic category
+
+Examples:
+
+183110
+→ Current unrestricted Central Bank balance
+→ A-CBI
+
+183120
+→ Statutory reserve
+→ A-CRR
+
+188000
+→ Foreign or group bank debit balance
+→ A-IGA or A-IBA
+
+153100
+→ Government investment
+→ A-TB
+
+114100
+→ Fixed asset cost
+→ A-FA
+
+221000
+→ Accumulated depreciation or depreciation provision
+→ A-FA contra
+
+166300
+→ Prepayment
+→ A-OA
+
+169000
+→ Other debit account
+→ A-OA
+
+Level 2: Ayra semantic layer
+
+Examples:
+
+A-CBI
+→ Central Bank asset
+
+A-CRR
+→ statutory regulatory reserve
+
+A-IGA
+→ intergroup asset
+
+A-IBA
+→ interbank asset
+
+A-TB
+→ treasury bills and eligible investment components
+
+A-FA
+→ fixed asset cost, WIP, clearing, depreciation, and impairment
+
+A-OA
+→ approved other assets
+
+L-CASA
+→ customer current and savings deposits
+
+L-IGL-C
+→ intergroup current liability
+
+L-IGL-F
+→ intergroup fixed or term liability
+
+L-PR
+→ provisions
+
+SPOT
+→ spot and FX-position accounts
+
+OBS-Gtee
+→ off-balance-sheet guarantees
+
+OBS-Contra
+→ off-balance-sheet contra and contingent accounts
+
+Level 3: Reporting roll-up
+
+Examples:
+
+A-CBI + A-CRR
+→ Balances with Central Bank
+
+A-IGA + A-IBA
+→ Debit Balances with Banks
+
+A-TB
+→ Investments in Securities
+
+A-FA
+→ Fixed Assets
+
+A-OA
+→ Other Assets
+
+The mapping validator must detect:
+
+- duplicate local-account mappings;
+- conflicting financial statement lines;
+- missing presentation signs;
+- missing account roles;
+- unknown semantic categories;
+- BS and OFF BS conflicts;
+- multiple active mappings for the same period;
+- non-zero unmapped accounts;
+- accounts mapped to multiple main statement lines without an allocation rule.
+
+
+============================================================
+9. ACCOUNTING ROLE AND PRESENTATION SIGN
+============================================================
+
+Do not determine presentation solely from the source sheet.
+
+Every mapped account must include:
+
+- natural side;
+- economic role;
+- statement type;
+- presentation sign;
+- reporting line.
+
+Supported economic roles should include:
+
+- ASSET_COST;
+- ASSET_WIP;
+- ASSET_CLEARING;
+- ACCUMULATED_DEPRECIATION;
+- ASSET_IMPAIRMENT;
+- ORDINARY_ASSET;
+- ORDINARY_LIABILITY;
+- CONTRA_ASSET;
+- CONTRA_LIABILITY;
+- EQUITY;
+- INCOME;
+- EXPENSE;
+- OFF_BALANCE_SHEET_DEBIT;
+- OFF_BALANCE_SHEET_CREDIT;
+- INFORMATIONAL_ONLY.
+
+Example presentation signs:
+
+Asset cost:
++1
+
+WIP:
++1
+
+Approved asset clearing:
++1 or -1 according to mapping
+
+Accumulated depreciation:
+-1
+
+Asset impairment:
+-1
+
+Ordinary liability within liability reporting:
++1
+
+Off-balance-sheet:
+excluded from primary balance-sheet totals
+
+Do not reverse an account merely because it appears on a Liability sheet.
+
+
+============================================================
+10. ACCOUNTING CALCULATORS
+============================================================
+
+Every calculator must implement a standard interface:
+
+calculate(records, reported_lines, context) -> CalculationResult
+
+Each calculator must return:
+
+- calculated line total;
+- individual account contributions;
+- formula;
+- included accounts;
+- deducted accounts;
+- excluded accounts;
+- reported amount;
+- variance;
+- status;
+- accounting explanation;
+- warnings.
+
+A. Central Bank calculator
+
+Formula:
+
+A-CBI
++ A-CRR
++ other approved Central Bank components
+= Balances with Central Bank
+
+Illustrative Iraq account calculation:
+
+183110
++ 183120
++ eligible 183130
+= Balances with Central Bank
+
+Include Schedule 3 reconciliation.
+
+B. Bank balances calculator
+
+Calculate asset and liability sides separately.
+
+Asset side:
+
+A-IGA
++ A-IBA
+= Debit Balances with Banks
+
+Liability side:
+
+L-IGL-C
++ L-IGL-F
++ L-IBL
+= Bank and Group Liabilities
+
+Do not automatically offset liability balances against asset balances.
+
+Where a schedule contains a net informational balance, calculate it separately and label it as schedule information.
+
+C. Investment calculator
+
+Formula may include:
+
+principal
++ premium
+- discount
++ approved positive MTM
+- approved negative MTM
+- impairment
+± approved carrying-value adjustment
+
+Do not automatically include an equity reserve in the asset carrying amount unless the approved mapping specifically instructs this treatment.
+
+D. Fixed asset calculator
+
+Formula:
+
+fixed asset costs
++ eligible WIP
+± approved fixed asset clearing
+- accumulated depreciation
+- asset impairment
+= Net Fixed Assets
+
+The calculator must expose each component separately.
+
+E. Other asset calculator
+
+Aggregate only approved A-OA accounts.
+
+Do not use Other Assets as an automatic residual plug.
+
+F. Capital and reserves calculator
+
+Calculate categories separately before producing any financial statement subtotal.
+
+G. Customer deposits calculator
+
+Retain product classifications such as:
+
+- current;
+- savings;
+- term;
+- customer;
+- bank;
+- group;
+- other deposit.
+
+H. Provisions calculator
+
+Distinguish:
+
+- tax;
+- employee;
+- bonus;
+- holiday;
+- gratuity;
+- ECL;
+- investment impairment;
+- other provisions.
+
+Do not treat every provision as an ordinary liability.
+
+I. Spot-position calculator
+
+Process SPOT separately.
+
+Do not absorb SPOT into Other Assets or Other Liabilities unless an approved final presentation rule explicitly requires it.
+
+J. Off-balance-sheet calculator
+
+Process:
+
+- OBS-Gtee;
+- OBS-Contra;
+- guarantees;
+- letters of credit;
+- FX forwards;
+- contingent accounts;
+- memorandum accounts.
+
+Exclude all approved OFF BS balances from primary balance-sheet totals.
+
+
+============================================================
+11. SCHEDULE ENGINE
+============================================================
+
+Build schedule-family modules rather than one script for every physical Excel worksheet.
+
+Schedule 3
+
+Validate:
+
+Central Bank current/free balance
++ statutory reserve
++ approved term balance
+= Schedule 3 total
+= Main statement Central Bank line
+
+Schedule 4
+
+Build and validate:
+
+- debit balances;
+- credit balances;
+- current balances;
+- term balances;
+- interbank balances;
+- intergroup balances;
+- gross presentation;
+- informational net balance;
+- Schedule 4 to TB;
+- Schedule 4 to main statement.
+
+Schedule 5
+
+Build and validate:
+
+- investment instrument;
+- carrying-value component;
+- sector;
+- currency;
+- schedule total;
+- main statement investment line.
+
+Currency schedule
+
+Control:
+
+sum of currency buckets
+= corresponding reported financial statement line
+
+Do not combine raw currency amounts without approved exchange rates.
+
+Maturity schedule
+
+Control:
+
+sum of maturity buckets
+= corresponding schedule or financial statement line
+
+Do not invent maturity classifications when the source does not provide them.
+
+Common schedule validator
+
+Every schedule must support:
+
+- row-total control;
+- column-total control;
+- grand-total control;
+- schedule-to-TB control;
+- schedule-to-main-statement control;
+- missing bucket control;
+- duplicate contribution control.
+
+
+============================================================
+12. SNAPSHOT SELECTION
+============================================================
+
+When multiple TBs such as W1, W2, W3, and W4 are provided, compare all candidates.
+
+Use high-confidence anchors:
+
+- Central Bank current account;
+- statutory reserve;
+- bank debit balances;
+- bank credit balances;
+- investments;
+- reciprocal Head Office and branch balances;
+- fixed asset cost;
+- accumulated depreciation;
+- prepayments;
+- other debit accounts;
+- customer deposits;
+- capital and reserves.
+
+For each candidate, calculate:
+
+- matched anchor count;
+- exact-match count;
+- precision-match count;
+- total absolute variance;
+- mapping coverage;
+- account coverage;
+- value coverage;
+- control failures.
+
+Produce a ranked recommendation with detailed numerical evidence.
+
+Do not infer dates not explicitly present in the files.
+
+Allow the user to override the recommended snapshot.
+
+
+============================================================
+13. ACCOUNT CLUBBING ENGINE
+============================================================
+
+Create `engine/account_clubber.py`.
+
+It must support many-to-one aggregation by:
+
+- financial statement line;
+- Ayra category;
+- Iraq reporting bucket;
+- schedule;
+- product;
+- currency;
+- residency;
+- maturity;
+- counterparty;
+- economic role.
+
+For every clubbed amount retain the contributing accounts.
+
+Example output:
+
+Financial statement line:
+Balances with Central Bank
+
+Included:
+
+183110 Current Account with Central Bank
+183120 Statutory Deposits
+183130 Eligible Central Bank Term Deposit
+
+Formula:
+
+sum of approved A-CBI contributions
++ sum of approved A-CRR contributions
+
+Every clubbing result must include account-level traceability.
+
+
+============================================================
+14. CONTROLLED COMBINATION MATCHING
+============================================================
+
+Combination matching is an exception-analysis function, not a primary mapping method.
+
+Only run it for unresolved financial statement lines or unmapped accounts.
+
+Required constraints:
+
+- configurable maximum combination size;
+- same statement type;
+- compatible natural side;
+- same unit basis;
+- compatible currency basis;
+- semantic compatibility;
+- no parent rows;
+- no control totals;
+- no previously consumed account unless split allocation is allowed;
+- no mixing of BS and OFF BS;
+- no mixing of P&L and BS;
+- no asset-liability netting without a presentation rule.
+
+Prefer:
+
+- the smallest coherent account set;
+- approved semantic proximity;
+- lower complexity;
+- exact or near-exact amount.
+
+Classify numerical-only matches as provisional.
+
+Do not automatically approve them.
+
+
+============================================================
+15. RECONCILIATION ENGINE
+============================================================
+
+Implement the orchestration sequence:
+
+1. Load configuration.
+2. Inspect source workbooks.
+3. Detect sheets and tables.
+4. Normalize source rows.
+5. Classify posting and non-posting rows.
+6. Load and validate mappings.
+7. Map local accounts.
+8. Calculate mapping coverage.
+9. Compare TB snapshots.
+10. Select or receive selected TB.
+11. Apply units and presentation signs.
+12. Run only the required accounting calculators.
+13. Build relevant supporting schedules.
+14. Aggregate statement lines.
+15. Calculate variances.
+16. Run controls.
+17. Diagnose exceptions.
+18. Store results.
+19. Return compact run summary.
+
+Support selective execution:
+
+- Assets only;
+- Liabilities only;
+- P&L only;
+- OFF BS only;
+- selected financial statement lines;
+- selected schedules;
+- full reconciliation.
+
+Do not execute unrelated modules when they are not requested.
+
+
+============================================================
+16. VARIANCE AND TOLERANCE ENGINE
+============================================================
+
+For every line calculate:
+
+Calculated Amount
+= sum of presented account contributions
+
+Variance
+= Calculated Amount - Reported Amount
+
+Absolute Variance
+= absolute value of Variance
+
+Variance Percentage
+= Absolute Variance / absolute value of Reported Amount
+
+Where the reported amount is zero, return variance percentage as not applicable.
+
+Use configurable tolerances.
+
+Suggested status hierarchy:
+
+- EXACT_MATCH;
+- PRECISION_MATCH;
+- ROUNDING_MATCH;
+- PARTIAL_MATCH;
+- MATERIAL_BREAK;
+- MAPPING_DIFFERENCE;
+- PRESENTATION_DIFFERENCE;
+- UNIT_DIFFERENCE;
+- SIGN_DIFFERENCE;
+- SCHEDULE_DIFFERENCE;
+- SOURCE_DATA_DIFFERENCE;
+- UNMAPPED_ACCOUNT;
+- DUPLICATE_MAPPING;
+- OFF_BS_EXCLUSION;
+- UNRESOLVED.
+
+Do not replace the actual variance with zero after applying tolerance.
+
+
+============================================================
+17. DIAGNOSTICS ENGINE
+============================================================
+
+Assign one or more root-cause codes:
+
+- HEADER_NOT_FOUND;
+- AMOUNT_PARSE_FAILED;
+- ACCOUNT_NORMALIZATION_FAILED;
+- NON_POSTING_ROW_INCLUDED;
+- PARENT_CHILD_DOUBLE_COUNT;
+- DUPLICATE_SOURCE_ROW;
+- DUPLICATE_MAPPING;
+- CONFLICTING_MAPPING;
+- UNMAPPED_ACCOUNT;
+- MISSING_PRESENTATION_SIGN;
+- UNIT_MISMATCH;
+- SIGN_MISMATCH;
+- MISSING_CONTRA_ACCOUNT;
+- OFF_BS_MISCLASSIFICATION;
+- SCHEDULE_BREAK;
+- CURRENCY_BREAK;
+- MATURITY_BREAK;
+- ROUNDING_DIFFERENCE;
+- PRECISION_DIFFERENCE;
+- SNAPSHOT_MISMATCH;
+- SOURCE_DATA_DIFFERENCE;
+- PROVISIONAL_COMBINATION_MATCH.
+
+Each exception must include:
+
+- root-cause code;
+- affected account or line;
+- supporting values;
+- likely cause;
+- suggested review action;
+- severity;
+- whether the engine can continue.
+
+
+============================================================
+18. CONTROL FRAMEWORK
+============================================================
+
+TB controls:
+
+- asset control total versus posting-account sum;
+- liability control total versus posting-account sum;
+- assets versus liabilities and equity, where appropriate;
+- duplicate account control;
+- parent-child double-counting control;
+- gross-to-net asset bridge.
+
+Mapping controls:
+
+- account-count coverage;
+- value coverage;
+- non-zero unmapped accounts;
+- duplicate mapping;
+- conflicting semantic category;
+- missing sign;
+- invalid reporting bucket;
+- invalid effective date.
+
+Statement controls:
+
+- line subtotal checks;
+- total assets reconstruction;
+- total liabilities reconstruction;
+- equity reconstruction;
+- gross versus net presentation;
+- contra-account deductions;
+- OFF BS exclusion.
+
+Schedule controls:
+
+- row totals;
+- column totals;
+- grand totals;
+- schedule-to-TB;
+- schedule-to-main-statement;
+- currency totals;
+- maturity totals.
+
+OFF BS controls:
+
+- debit contra total;
+- credit contra total;
+- equality or expected residual;
+- exclusion from primary BS;
+- guarantee and contingent classifications.
+
+
+============================================================
+19. RESULT STORAGE
+============================================================
+
+Support the following logical outputs:
+
+RECON_RUN_CONTROL
+RECON_SOURCE_FILES
+RECON_TB_STANDARDIZED
+RECON_MAPPING_VALIDATION
+RECON_ACCOUNT_CLASSIFIED
+RECON_LINE_RESULTS
+RECON_ACCOUNT_TRACE
+RECON_SCHEDULE_RESULTS
+RECON_CONTROL_RESULTS
+RECON_EXCEPTIONS
+
+Use adapters or repositories so that the core engine is unaware of physical Dataiku dataset names.
+
+The WebApp should receive:
+
+- run ID;
+- execution status;
+- compact summary;
+- counts of exceptions by status;
+- selected snapshot;
+- overall control status.
+
+Detailed results must be loaded on demand.
+
+
+============================================================
+20. EXCEL EXPORT
+============================================================
+
+Generate an audit-ready workbook with these sheets:
+
+1. Executive Summary
+2. Statement Reconciliation
+3. Account Trace
+4. Clubbing Breakdown
+5. Schedule Tie-Out
+6. Mapping Validation
+7. Unmapped Accounts
+8. Exceptions
+9. Control Results
+10. Snapshot Comparison
+11. Excluded Rows
+12. OFF BS Reconciliation
+13. Configuration
+14. Run Metadata
+
+Executive Summary columns:
+
+- reporting line;
+- reported amount;
+- calculated amount;
+- variance;
+- status;
+- supporting account count;
+- supporting schedule;
+- exception count;
+- explanation.
+
+Account Trace columns:
+
+- source file;
+- source sheet;
+- source row;
+- account;
+- description;
+- original balance;
+- source unit;
+- conversion factor;
+- converted balance;
+- statement type;
+- natural side;
+- economic role;
+- Ayra category;
+- Iraq reporting bucket;
+- financial statement line;
+- schedule;
+- presentation sign;
+- presented amount;
+- mapping method;
+- mapping confidence;
+- rationale;
+- review status.
+
+Use consistent formats:
+
+- financial amounts;
+- percentages;
+- status colors;
+- filters;
+- frozen headers;
+- readable widths;
+- no merged cells in detailed data sheets.
+
+The export module must receive a completed reconciliation result.
+
+It must not rerun the reconciliation.
+
+
+============================================================
+21. DATAIKU WEBAPP BACKEND
+============================================================
+
+Develop a thin `backend.py`.
+
+Recommended endpoints:
+
+POST /api/files
+POST /api/inspect
+POST /api/validate
+POST /api/mapping/validate
+POST /api/snapshots/compare
+POST /api/reconcile
+GET  /api/runs/<run_id>/summary
+POST /api/runs/<run_id>/line-detail
+POST /api/runs/<run_id>/schedule-detail
+POST /api/runs/<run_id>/exceptions
+POST /api/runs/<run_id>/controls
+POST /api/runs/<run_id>/export
+
+Each endpoint must:
+
+1. Validate required parameters.
+2. Call exactly one service or public API operation.
+3. Return compact JSON.
+4. Handle controlled exceptions.
+5. Avoid returning giant DataFrames.
+
+Example pattern:
+
+from flask import request, jsonify
+from iraq_recon import api
+from iraq_recon.exceptions import ReconError
+
+@app.route("/api/reconcile", methods=["POST"])
+def reconcile():
+    payload = request.get_json(silent=True) or {}
+
+    result = api.run_reconciliation(
+        configuration=payload
+    )
+
+    return jsonify(result.summary_dict())
+
+@app.errorhandler(ReconError)
+def handle_reconciliation_error(error):
+    return jsonify(error.to_dict()), error.http_status
+
+Do not create the Flask app object if Dataiku supplies it.
+
+Do not include business calculations in route functions.
+
+
+============================================================
+22. WEBAPP PERFORMANCE RULES
+============================================================
+
+Implement these controls:
+
+1. Read each source workbook once per run.
+2. Cache normalized source data for the active run.
+3. Do not reparse files during summary or drill-down requests.
+4. Return only summary data initially.
+5. Load account details on demand.
+6. Paginate long results.
+7. Filter details server-side.
+8. Run only selected accounting modules.
+9. Run combination matching only for unresolved items.
+10. Generate the export only when requested.
+11. Do not send binary workbooks through JSON.
+12. Avoid storing large DataFrames in browser state.
+13. Use vectorized joins and grouping where possible.
+14. Use Decimal-safe aggregation functions.
+15. Do not rely on unrestricted global mutable state.
+
+
+============================================================
+23. CONFIGURATION
+============================================================
+
+Use typed configuration.
+
+Example sections:
+
+source:
+    financial_statement_folder_id
+    trial_balance_folder_id
+    mapping_folder_id
+
+units:
+    tb_unit
+    financial_statement_unit
+    conversion_factor
+
+tolerances:
+    precision
+    rounding
+    materiality
+
+execution:
+    statement_sections
+    schedule_codes
+    run_combination_matching
+    maximum_combination_size
+
+mapping:
+    effective_date
+    allow_description_suggestions
+    require_approved_mapping
+
+output:
+    result_dataset_names
+    export_folder_id
+    export_filename_pattern
+
+Do not hardcode folder IDs, dataset names, or tolerances across multiple scripts.
+
+
+============================================================
+24. TESTING REQUIREMENTS
+============================================================
+
+Create unit tests for every major module.
+
+Test cases must include:
+
+- header not on row 1;
+- account number stored as float;
+- leading-zero account;
+- comma-formatted amount;
+- parenthetical negative;
+- blank amount;
+- invalid amount text;
+- parent and child account rows;
+- duplicate mappings;
+- ambiguous mappings;
+- unmapped non-zero account;
+- contra-asset on liability sheet;
+- OFF BS accounts;
+- exact match;
+- Decimal precision match;
+- rounding match;
+- sign mismatch;
+- unit mismatch;
+- incomplete schedule;
+- snapshot comparison;
+- fixed asset gross-to-net calculation;
+- Central Bank clubbing;
+- gross bank asset and liability presentation;
+- Other Assets exclusion of separately reported reciprocal accounts.
+
+Create an end-to-end test that performs:
+
+trial balance bytes
+    ↓
+financial statement bytes
+    ↓
+mapping bytes
+    ↓
+normalization
+    ↓
+classification
+    ↓
+mapping
+    ↓
+calculation
+    ↓
+schedule tie-out
+    ↓
+statement reconciliation
+    ↓
+controls
+    ↓
+Excel export
+
+No Dataiku installation should be required for the engine unit tests.
+
+Mock or replace only the Dataiku adapters.
+
+
+============================================================
+25. IRAQ SEED RULES
+============================================================
+
+Supply the following as configuration or mapping seed data, not scattered hardcoded logic.
+
+183110
+→ A-CBI
+→ Balances with Central Bank
+→ Add
+
+183120
+→ A-CRR
+→ Balances with Central Bank
+→ Add
+
+183130
+→ A-CBI
+→ Balances with Central Bank
+→ Add when eligible
+
+188000
+→ A-IGA or approved A-IBA classification
+→ Debit Balances with Banks
+→ Add on asset side
+
+251800
+→ L-IGL-C or approved L-IBL classification
+→ Bank or Group Current Liabilities
+→ Add on liability side
+
+253400
+→ L-IGL-F or approved L-MM-F classification
+→ Bank or Group Term Liabilities
+→ Add on liability side
+
+163000
+→ approved Head Office and Branch classification
+→ Head Office and Branches
+→ Add separately
+
+153100
+→ A-TB
+→ Investments in Securities
+→ Add
+
+114100
+→ A-FA
+→ Fixed Assets
+→ Asset cost, add
+
+116000
+→ A-FA
+→ Fixed Assets
+→ Asset cost, add
+
+117000
+→ A-FA
+→ Fixed Assets
+→ Asset cost, add
+
+120000
+→ A-FA
+→ Fixed Assets
+→ WIP, add
+
+221000
+→ A-FA contra
+→ Fixed Assets
+→ Accumulated depreciation, deduct
+
+166300
+→ A-OA
+→ Other Assets
+→ Add
+
+169000
+→ A-OA
+→ Other Assets
+→ Add
+
+190000
+→ OBS-Contra
+→ Off Balance Sheet
+→ Exclude from primary BS
+
+290000
+→ OBS-Contra
+→ Off Balance Sheet
+→ Exclude from primary BS
+
+Accounting seed formulas:
+
+Balances with Central Bank
+=
+A-CBI + A-CRR
+
+Debit Balances with Banks
+=
+approved asset-side A-IGA + A-IBA
+
+Investments
+=
+approved A-TB carrying-value components
+
+Net Fixed Assets
+=
+cost + WIP ± approved clearing
+- accumulated depreciation
+- impairment
+
+Other Assets
+=
+approved A-OA accounts only
+
+Do not treat account 163000 as Other Assets when it is separately reported as Head Office and Branches.
+
+Do not offset bank credit balances against bank debit balances in the main financial statement unless the approved presentation mapping explicitly requires netting.
+
+
+============================================================
+26. REQUIRED DELIVERY FORMAT
+============================================================
+
+Generate the solution module by module.
+
+For every script provide:
+
+1. Full relative file path.
+2. Complete runnable Python code.
+3. Module purpose.
+4. Public functions or classes.
+5. Inputs and outputs.
+6. Dependencies.
+7. Error-handling behavior.
+8. Unit tests.
+9. Integration notes.
+
+Do not provide partial snippets with placeholders such as:
+
+- add your logic here;
+- existing code;
+- continue similarly;
+- implementation omitted.
+
+Do not create files that duplicate another module’s responsibility.
+
+Use:
+
+- type hints;
+- concise docstrings;
+- structured exceptions;
+- standard logging;
+- deterministic return types;
+- dependency injection where useful;
+- no mutable default arguments;
+- no hidden global state.
+
+Before completing the design, perform a consistency check:
+
+- all imports resolve;
+- no circular imports;
+- public API functions exist;
+- models match service usage;
+- adapters match repository usage;
+- calculators use the same standard interface;
+- tests reference valid modules;
+- Dataiku is imported only in Dataiku-specific adapters or WebApp integration;
+- financial calculations do not convert Decimal to float;
+- exportsnym use completed result objects;
+- backend routes contain no reconciliation logic.
+
+
+============================================================
+27. BUILD ORDER
+============================================================
+
+Build in this sequence:
+
+Phase 1: Foundation
+
+- constants.py
+- exceptions.py
+- models
+- configuration
+- logging utilities
+
+Phase 2: Ingestion
+
+- Excel reader
+- workbook inspector
+- header detector
+- table detector
+- sheet classifier
+- financial statement reader
+- trial balance reader
+
+Phase 3: Normalization
+
+- account
+- description
+- amount
+- unit
+- schema
+- row classification
+
+Phase 4: Mapping
+
+- mapping loader
+- local bridge
+- Ayra mapper
+- reporting mapper
+- mapping validator
+- coverage calculator
+
+Phase 5: Accounting rules
+
+- account roles
+- presentation signs
+- units
+- exclusions
+- tolerances
+- formula registry
+
+Phase 6: Asset calculators
+
+- Central Bank
+- bank balances
+- investments
+- fixed assets
+- other assets
+
+Phase 7: Remaining calculators
+
+- capital and reserves
+- deposits
+- provisions
+- SPOT
+- OFF BS
+
+Phase 8: Schedules
+
+- Schedule 3
+- Schedule 4
+- Schedule 5
+- currency schedules
+- maturity schedules
+- schedule validator
+
+Phase 9: Core engine
+
+- snapshot selector
+- account clubber
+- variance engine
+- reconciliation engine
+- diagnostics
+- controlled combination matcher
+
+Phase 10: Controls
+
+- TB
+- mapping
+- schedule
+- statement
+- OFF BS
+- central control runner
+
+Phase 11: Services and persistence
+
+- validation service
+- mapping service
+- snapshot service
+- reconciliation service
+- review service
+- repositories
+
+Phase 12: Export
+
+- JSON exporter
+- Excel exporter
+- audit exporter
+
+Phase 13: Dataiku integration
+
+- Dataiku adapters
+- thin backend routes
+
+Phase 14: Frontend integration
+
+- API contract
+- summary screens
+- mapping review
+- reconciliation results
+- drill-down
+- exceptions
+- export
+
+Phase 15: Testing
+
+- module tests
+- integration tests
+- end-to-end test
+- Dataiku adapter tests
+
+
+============================================================
+28. EXPECTED FINAL ARCHITECTURE
+============================================================
+
+The final execution flow must be:
+
+User
+    ↓
+Dataiku WebApp Frontend
+    ↓
+Thin backend.py
+    ↓
+iraq_recon.api
+    ↓
+Service layer
+    ↓
+Dataiku adapters and source repositories
+    ↓
+Ingestion
+    ↓
+Normalization
+    ↓
+Mapping validation
+    ↓
+Snapshot selection
+    ↓
+Presentation rules
+    ↓
+Accounting calculators
+    ↓
+Schedule builders
+    ↓
+Account clubbing
+    ↓
+Variance engine
+    ↓
+Control framework
+    ↓
+Diagnostics
+    ↓
+Result repository
+    ↓
+WebApp summary and drill-down
+    ↓
+Audit-ready Excel export
+
+
+============================================================
+29. SUCCESS CRITERIA
+============================================================
+
+The solution is successful only when:
+
+1. Every calculated amount is traceable to individual source accounts.
+2. Every account is mapped, excluded, split by rule, or reported as unresolved.
+3. Parent and detail rows are not double counted.
+4. Units are converted exactly once.
+5. Contra accounts receive their correct economic presentation.
+6. OFF BS accounts do not enter primary BS totals.
+7. Bank asset and liability balances are not incorrectly netted.
+8. Fixed assets reconcile gross cost to net carrying value.
+9. Schedules tie independently to the TB and main statement.
+10. Raw variances are never overwritten.
+11. Precision differences remain visible.
+12. Mapping suggestions remain provisional until approved.
+13. The Dataiku WebApp backend remains lightweight.
+14. Core library tests run outside Dataiku.
+15. A completed result can be exported without rerunning the reconciliation.
+16. New countries can be supported mainly through configuration and mapping updates.
