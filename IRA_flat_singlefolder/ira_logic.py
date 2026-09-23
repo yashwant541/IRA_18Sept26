@@ -396,8 +396,10 @@ def _inherent_shortfall_sheet(wb, frames, tables):
     S = _styling()
     ws = wb.create_sheet("Inherent & Shortfall trace")
     ws["A1"] = "Inherent & Shortfall trace"; ws["A1"].font = S["TITLE"]
-    ws["A2"] = ("Calculated Inherent = max (highest) risk number in each theme x the theme weight, "
-                "summed (1bii excluded), then banded. Shortfall = (securities + real-estate)/1000 / ENR PvB.")
+    ws["A2"] = ("Calculated Inherent = max in each theme x the theme weight, summed (1bii excluded), "
+                "then banded. Per country the max is over risk numbers; for GROUP, ENR-weighted labels "
+                "use their weighted-sum Value and table-op labels their risk number. "
+                "Shortfall = (securities + real-estate)/1000 / ENR PvB.")
     ws["A2"].font = S["BODY"]
     heads = ["Product / Country", "Detail", "Value", "Rating", "Risk No."]
     widths = [30, 62, 16, 12, 9]
@@ -433,8 +435,9 @@ def _inherent_shortfall_sheet(wb, frames, tables):
             rc.fill = PatternFill("solid", fgColor=RATING_FILL.get(rt, "FFFFFF"))
             band(r, 5, "")
             r += 1
+            _mk = "max (value/risk)" if e["country"] == "GROUP" else "max risk"
             for labs, mx, contrib in e["themes"]:
-                band(r, 2, f"theme {labs}: max risk = {mx}  x  weight {e['weight']:.4f}")
+                band(r, 2, f"theme {labs}: {_mk} = {mx}  x  weight {e['weight']:.4f}")
                 band(r, 3, contrib)
                 r += 1
             band(r, 2, "weighted sum (score)"); band(r, 3, e["score"]); r += 1

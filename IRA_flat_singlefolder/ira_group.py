@@ -705,17 +705,41 @@ def inherent_trace(frames):
         ordered = [_canon(m["label"]) for m in metric_defs]
         groups = C.AGG_GROUPS.get(product, [])
         weight = (1.0 / len(groups)) if (C.NORMALISE_WEIGHTS and groups) else C.W6
+        # GROUP inherent (Change 1): ENR-weighted labels contribute their continuous
+        # weighted-sum VALUE, table-op labels their risk number.  Per-country rows keep
+        # risk numbers throughout.
         rows = []
         for ctry in list(dict.fromkeys(frame[ctry_col].tolist())):
+            is_group = (ctry == GROUP_COUNTRY)
+            table_ops = TABLE_OP_KEYS.get(product, set(_DPD)) if is_group else set()
+            ikey = {}
+            if is_group:
+                for m in metric_defs:
+                    cn = _canon(m["label"])
+                    ik = getattr(m.get("value"), "int_key", m.get("value"))
+                    if (not ik) and cn in CANON_TO_DPD:
+                        ik = CANON_TO_DPD[cn]
+                    ikey[cn] = ik
             body = frame[(frame[ctry_col] == ctry) &
                          (~frame[lab_col].astype(str).str.startswith("Calculated"))]
             rn = {}
             for _, r in body.iterrows():
+                cn = _canon(r[lab_col])
                 n = r.get("Risk Number", "")
                 try:
-                    rn[_canon(r[lab_col])] = float(n) if n not in ("", None) else None
+                    rnum = float(n) if n not in ("", None) else None
                 except Exception:
-                    pass
+                    rnum = None
+                if is_group and (ikey.get(cn) not in table_ops):
+                    val = r.get("Value"); v = None       # ENR-weighted -> weighted-sum value
+                    if isinstance(val, (int, float)) and not isinstance(val, bool):
+                        v = float(val)
+                    elif isinstance(val, str) and val.strip() and "%" not in val:
+                        try: v = float(val)
+                        except Exception: v = None
+                    rn[cn] = v if v is not None else rnum
+                else:
+                    rn[cn] = rnum
             detail, score = [], 0.0
             for positions in groups:
                 labs = [ordered[p - 1] for p in positions if 1 <= p <= len(ordered)]
