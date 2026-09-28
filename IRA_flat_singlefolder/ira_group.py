@@ -103,8 +103,11 @@ TABLE_OP_KEYS = {
     "Unsecured": _DPD | {"policy_exc_rate", "volatile"},
     "SME Banking": _DPD | {"ea_prop", "awc_prop", "policy_exc_rate"},
     "Wealth Lending": _DPD | {"ea_prop", "awc_prop", "policy_exc_rate", "shortfall"},
-    "Wealth Lending - Retail Banking": set(_DPD),
-    "Wealth Lending - PvB": _DPD | {"shortfall"},
+    # Retail 1g (policy) is a table op so GROUP matches Wealth Lending's 1g.
+    "Wealth Lending - Retail Banking": _DPD | {"policy_exc_rate"},
+    # PvB GROUP 1d/1e (EA/AWC) and 1g (policy) are table ops - identical to
+    # Wealth Lending's - rather than PvB-ENR weighted.
+    "Wealth Lending - PvB": _DPD | {"shortfall", "ea_prop", "awc_prop", "policy_exc_rate"},
 }
 PRODUCTS = set(CATEGORY_ENR_LINES)
 
@@ -114,14 +117,42 @@ PRODUCTS = set(CATEGORY_ENR_LINES)
 # reused for 1d, 1h, 1i, 2a and 2b.  (Table-op labels 1bi/1bii/1c/1e/1f/1g are
 # unaffected, and per-country SME calculations are unaffected - GROUP only.)
 _SME_GROUP_WEIGHTED = ("1a", "1d", "1h", "1i", "2a", "2b")
-# Wealth Lending - PvB GROUP: every ENR-weighted label weights on the PvB ENR
-# line ALONE (its own exposure %), not Wealth Banking + PvB.  (Table-op labels
-# 1bi/1bii/1c/1f are unaffected; per-country PvB is unaffected - GROUP only.)
-_PVB_GROUP_WEIGHTED = ("1a", "1d", "1e", "1g", "1h", "1i", "2a", "2b")
+# Wealth Lending - PvB GROUP: the remaining ENR-weighted labels weight on the
+# PvB ENR line ALONE (its own exposure %), not Wealth Banking + PvB.  1d/1e/1g
+# are now table ops (same as Wealth Lending), so they leave this set; 1bi/1bii/
+# 1c/1f stay table ops; per-country PvB is unaffected - GROUP only.
+_PVB_GROUP_WEIGHTED = ("1a", "1h", "1i", "2a", "2b")
 WEIGHT_OVERRIDE = {**{("SME Banking", c): ["SME Banking", "ME"]
                       for c in _SME_GROUP_WEIGHTED},
                    **{("Wealth Lending - PvB", c): ["PvB"]
                       for c in _PVB_GROUP_WEIGHTED}}
+
+# GROUP-only: per-product override for the deterioration (1bi/1bii/1c) ENR
+# denominator.  Wealth Lending GROUP bases 1bi/1bii/1c on the Retail basis -
+# Wealth Banking ENR alone (not Wealth Banking + PvB) - so the three rows match
+# Wealth Lending - Retail Banking GROUP.  Per-country deterioration is unaffected.
+DPD_DENOM_LINES = {"Wealth Lending": ["Wealth Banking"]}
+
+
+def _awc_group_ladder(value):
+    """GROUP-only rating ladder for Wealth 1e (AWC proportion): >12.5% Very High,
+    >10% High, >7.5% Medium, >5% Low, else Very Low."""
+    if value is None:
+        return ""
+    if value > 0.125:  return "Very High"
+    if value > 0.10:   return "High"
+    if value > 0.075:  return "Medium"
+    if value > 0.05:   return "Low"
+    return "Very Low"
+
+
+# GROUP-only rating override per (product, canonical id): replaces the label's
+# normal ratings ladder for the GROUP row.  Wealth Lending & PvB 1e use the AWC
+# ladder above (PvB 1e mirrors Wealth Lending 1e).
+GROUP_RATE_OVERRIDE = {
+    ("Wealth Lending", "1e"): _awc_group_ladder,
+    ("Wealth Lending - PvB", "1e"): _awc_group_ladder,
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -260,7 +291,8 @@ def _fmt_pct(v: Optional[float]) -> Any:
 def _dpd_pct(tables, product, month) -> Optional[float]:
     dpd_key, dpd_prod = DPD_LINES[product]
     num = _sum_product_at(tables.get(dpd_key), dpd_prod, month)
-    den = _sum_lines_at(tables.get("ENR"), CATEGORY_ENR_LINES[product], month)
+    den_lines = DPD_DENOM_LINES.get(product, CATEGORY_ENR_LINES[product])
+    den = _sum_lines_at(tables.get("ENR"), den_lines, month)
     if num is None or not den:
         return None
     return num / den
@@ -461,13 +493,22 @@ def append_group_rows(frame, product_out, tables):
         if (not int_key) and canon in CANON_TO_DPD:
             int_key = CANON_TO_DPD[canon]     # PvB deterioration -> Wealth 30+$ op
         wsum = None
-        if int_key in table_ops:
+        if (product_out, canon) in C.NOT_APPLICABLE:
+            # hard-coded Not Applicable (e.g. Retail 1i): show the status, carry no
+            # risk number, and drop out of the Calculated Inherent.
+            val = None
+            display, rating, number = "Not Applicable", "Not Applicable", None
+            note = "Not Applicable for Retail Banking"
+        elif int_key in table_ops:
             if int_key in _DPD:
                 val = dpd_group.get(canon)
                 rating = _rate_dpd(canon, val)
             else:
                 val = _ratio_value(tables, product_out, int_key)
                 rating = _rate_ratio(m, int_key, val)
+            ovr = GROUP_RATE_OVERRIDE.get((product_out, canon))
+            if ovr and val is not None:
+                rating = ovr(val)                # GROUP-only ladder override (1e)
             display = _fmt_pct(val)
             number = E.RISK_NUMBER.get(rating) if rating else None
             note = "GROUP table operation (all countries)"
@@ -487,9 +528,13 @@ def append_group_rows(frame, product_out, tables):
                 display = round(wsum, 3)
             note = "GROUP ENR-weighted (country %; basis: " + " + ".join(lines) + ")"
         group_num[canon] = number
-        # table-op -> risk number; ENR-weighted -> its displayed weighted-sum value
-        group_val[canon] = number if (int_key in table_ops) else \
-            (round(wsum, 3) if wsum is not None else None)
+        # table-op -> risk number; ENR-weighted -> its displayed weighted-sum value;
+        # Not Applicable -> None (excluded from the inherent).
+        if (product_out, canon) in C.NOT_APPLICABLE:
+            group_val[canon] = None
+        else:
+            group_val[canon] = number if (int_key in table_ops) else \
+                (round(wsum, 3) if wsum is not None else None)
         row = {c: "" for c in cols}
         row[ctry_col] = GROUP_COUNTRY
         row[lab_col] = m["label"]
@@ -610,7 +655,11 @@ def _trace_group_product(frame, product, tables):
             int_key = CANON_TO_DPD[canon]
         detail = []
         wsum = None
-        if int_key in table_ops:
+        if (product, canon) in C.NOT_APPLICABLE:
+            kind = "not applicable"
+            val, display, rating, number = None, "Not Applicable", "Not Applicable", None
+            detail = [("hard-coded Not Applicable for Retail Banking", "")]
+        elif int_key in table_ops:
             kind = "table operation (all countries)"
             if int_key in _DPD:
                 val = dpd_group.get(canon)
@@ -631,6 +680,10 @@ def _trace_group_product(frame, product, tables):
                 val = _ratio_value(tables, product, int_key)
                 rating = _rate_ratio(m, int_key, val)
                 detail = _ratio_detail(tables, product, int_key, val)
+            ovr = GROUP_RATE_OVERRIDE.get((product, canon))
+            if ovr and val is not None:
+                rating = ovr(val)                # GROUP-only ladder override (1e)
+                detail.append(("rated by GROUP ladder (>12.5% VH / >10% H / >7.5% M / >5% L)", rating))
             display = _fmt_pct(val)
             number = E.RISK_NUMBER.get(rating) if rating else None
         else:
@@ -660,8 +713,11 @@ def _trace_group_product(frame, product, tables):
                 detail.append(("weighted sum", round(wsum, 4)))
                 detail.append((f"rounded to nearest 1..5", number))
         group_num[canon] = number
-        group_val[canon] = number if (int_key in table_ops) else \
-            (round(wsum, 3) if wsum is not None else None)
+        if (product, canon) in C.NOT_APPLICABLE:
+            group_val[canon] = None
+        else:
+            group_val[canon] = number if (int_key in table_ops) else \
+                (round(wsum, 3) if wsum is not None else None)
         entries.append({"label": m["label"], "kind": kind, "value": display,
                         "rating": rating, "number": number, "detail": detail})
 

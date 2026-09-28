@@ -531,3 +531,9 @@ METRICS: Dict[str, Callable[[], List[dict]]] = {
 }
 
 FINAL_LABEL = "Calculated Inherent Credit Risk Assessment:"
+
+# (product, canonical label-id) pairs that are hard-coded "Not Applicable"
+# everywhere - per country and at GROUP - regardless of the underlying data.
+# The label shows "Not Applicable" (no risk number) and drops out of the
+# Calculated Inherent (its theme contributes nothing).
+NOT_APPLICABLE = {("Wealth Lending - Retail Banking", "1i")}

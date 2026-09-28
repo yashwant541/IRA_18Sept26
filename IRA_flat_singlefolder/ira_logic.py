@@ -692,7 +692,8 @@ def _reference_sheets(wb, S, hdr, row):
         ("EA (SME)", "SME 1e", ">.10 VH | >.075 H | >.05 M | >.025 L | else VL"),
         ("AWC (SME)", "SME 1f", ">.125 VH | >.10 H | >.075 M | >.05 L | else VL"),
         ("EA (Wealth)", "Wealth 1d", ">.01 VH | >.0075 H | >.005 M | >.0025 L | else VL"),
-        ("AWC (Wealth)", "Wealth 1e", ">.035 VH | >.025 H | >.015 M | >.005 L | else VL"),
+        ("AWC (Wealth) - per country", "Wealth 1e", ">.035 VH | >.025 H | >.015 M | >.005 L | else VL"),
+        ("AWC (Wealth) - GROUP", "Wealth Lending & PvB 1e (GROUP)", ">.125 VH | >.10 H | >.075 M | >.05 L | else VL"),
         ("Shortfall (Wealth)", "Wealth 1f", ">.25 VH | >.10 H | >.05 M | >.03 L | else VL"),
         ("LTV>80", "Secured 1g", ">.10 VH | >.05 H | >.025 M | >.01 L | else VL"),
         ("Volatile", "Unsecured 1g", ">.125 VH | >.10 H | >.075 M | >.05 L | else VL"),
@@ -720,10 +721,10 @@ def _reference_sheets(wb, S, hdr, row):
     r = 3
     for t, k in txt:
         ws.cell(r, 1, t).font = {"sub": S["SUB"], "b": S["BOLD"]}.get(k, S["BODY"]); r += 1
-    groups = [("Secured", "[1] [2,3,4,5] [6,7,8] [9] [10] [11,12,13]"),
+    groups = [("Secured", "[1] [2,3,4,5] [6,7] [8] [9] [10,11,12,13]"),
               ("Unsecured", "[1] [2,3,4,5] [6,7] [8] [9] [10,11]"),
               ("SME Banking", "[1] [2,3,4,5,6,7] [8,9] [10] [11,12]"),
-              ("Wealth (all three)", "[1] [2,3,4,5,6,7] [8,9] [10,11]")]
+              ("Wealth (all three)", "[1] [2,3,4,5,6,7] [8,9] [10] [11,12]  (Retail 1i=pos 10 Not Applicable -> that theme drops out)")]
     hdr(ws, r, ["Product", "Groups"], [24, 60]); r += 1
     for v in groups:
         row(ws, r, v, fonts=[S["BOLD"], S["BODY"]]); r += 1
@@ -743,8 +744,9 @@ def _reference_sheets(wb, S, hdr, row):
         ("   Unsecured : 1bi 1bii 1c , 1e policy , 1g volatile", ""),
         ("   SME       : 1bi 1bii 1c , 1e EA , 1f AWC , 1g policy", ""),
         ("   Wealth L. : 1bi 1bii 1c , 1d EA , 1e AWC , 1f shortfall , 1g policy", ""),
-        ("   Retail/PvB: 1bi 1bii 1c (+ 1f shortfall for PvB); rest are weighted", ""),
-        ("   Wealth Lending 1i (breaches) is ENR-weighted, not a table operation", ""),
+        ("   Retail    : 1bi 1bii 1c , 1g policy ; 1d/1e/1f blank ; 1i Not Applicable", ""),
+        ("   PvB       : 1bi 1bii 1c , 1d EA , 1e AWC , 1f shortfall , 1g policy (same as Wealth L.)", ""),
+        ("   Wealth Lending & PvB 1i (breaches) are ENR-weighted; Retail 1i is Not Applicable", ""),
     ]
     r = 3
     for t, k in intro:
@@ -759,10 +761,10 @@ def _reference_sheets(wb, S, hdr, row):
          "shown as its own row; excluded from the GROUP inherent (1bi drives the pair)"),
         ("1c YoY deterioration",
          "DPD%(current) - DPD%(current - 1 year)",
-         "all three Wealth products use the 30+$ 'Wealth Banking' line"),
+         "Wealth uses the 30+$ 'Wealth Banking' line; Wealth Lending GROUP 1bi/1bii/1c use the Retail ENR basis (Wealth Banking denom only), so they match Retail GROUP"),
         ("policy exceptions rate",
          "SUM(L2+L3 over 12m, all) / SUM(new approved over 12m, all)",
-         "Secured/Unsec 1e, SME/Wealth 1g"),
+         "Secured/Unsec 1e, SME/Wealth 1g; table op for all three Wealth products (Retail & PvB 1g same as Wealth Lending)"),
         ("LTV>80 (Secured 1g)",
          "the LTV>80 table's own 'Total' row, shown as the input %",
          "point-in-time, latest month"),
@@ -774,10 +776,10 @@ def _reference_sheets(wb, S, hdr, row):
          "numerator: SME = ME EA/AWC table, Wealth = PvB EA/AWC table; denom ENR: SME=ME, Wealth=PvB"),
         ("AWC proportion (SME 1f, Wealth 1e)",
          "SUM(AWC$, all countries, latest) / SUM(ENR, latest)",
-         "table op for SME & Wealth Lending; Retail/PvB EA-AWC are ENR-weighted"),
+         "table op for SME, Wealth Lending & PvB (PvB 1d/1e same as Wealth Lending); Retail EA/AWC blank. Wealth GROUP 1e (AWC) uses the GROUP ladder (sheet 3)"),
         ("shortfall (Wealth 1f)",
          "(securities Total-Amount + real-estate Total-Amount)/1000 / SUM(ENR Wealth Banking)",
-         "Wealth Lending & PvB; Retail blank; 1i breaches is ENR-weighted, not here"),
+         "Wealth Lending & PvB; Retail blank; 1i breaches: WL & PvB ENR-weighted, Retail Not Applicable"),
     ]
     for v in ratio:
         row(ws, r, v, fonts=[S["BOLD"], S["BODY"], S["BODY"]]); r += 1
@@ -788,13 +790,15 @@ def _reference_sheets(wb, S, hdr, row):
         ("over ALL countries (latest month) - NOT renormalised, so the config countries'", ""),
         ("weights need not sum to 1. GROUP number = SUM over the product's config countries", ""),
         ("of (per-country risk number x weight), rounded to the nearest 1..5; then its rating.", ""),
-        ("The three Wealth products share the Wealth Lending ENR (Wealth Banking + PvB).", ""),
+        ("Wealth Lending & Retail weight on the Wealth Lending ENR (Wealth Banking + PvB / Wealth", ""),
+        ("Banking); PvB GROUP ENR-weighted labels weight on the PvB ENR line alone.", ""),
         ("", ""),
         ("Each GROUP row is tagged in the output ('GROUP table operation (all countries)' or", ""),
         ("'GROUP ENR-weighted (country %)') so you can see which rule produced it.", ""),
         ("", ""),
-        ("GROUP inherent: same theme groups as sheet 4; take the max (highest) GROUP risk", "sub"),
-        ("number in each theme, x the theme weight, summed - with 1bii excluded.", ""),
+        ("GROUP inherent: same theme groups as sheet 4. In each theme take the max, x the theme", "sub"),
+        ("weight, summed (1bii excluded). ENR-weighted labels contribute their weighted-sum VALUE,", ""),
+        ("table-op labels their risk number; a 'Not Applicable' label (Retail 1i) drops out.", ""),
     ]
     for t, k in tail:
         ws.cell(r, 1, t).font = {"sub": S["SUB"], "b": S["BOLD"]}.get(k, S["BODY"]); r += 1

@@ -72,6 +72,16 @@ def compute_country_product(tables: Dict[str, Any], country: str,
     result: Dict[str, Any] = {}
     for m in metric_defs:
         val = ctx[m["id"]]
+        if (product_out, m["id"]) in C.NOT_APPLICABLE:
+            # hard-coded Not Applicable: show the status, no risk number, and let
+            # it drop out of the Calculated Inherent (number None -> theme skipped).
+            result[m["id"]] = dict(label=m["label"], value=val,
+                                   display="Not Applicable", rating="Not Applicable",
+                                   number=None, group=m["group"],
+                                   weight_key=m["weight_key"],
+                                   int_key=getattr(m["value"], "int_key", ""),
+                                   reason="Not Applicable for Retail Banking")
+            continue
         try:
             rating = m["rating"](val, ctx)
         except Exception:
