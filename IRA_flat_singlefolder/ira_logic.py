@@ -745,7 +745,7 @@ def _reference_sheets(wb, S, hdr, row):
         ("   SME       : 1bi 1bii 1c , 1e EA , 1f AWC , 1g policy", ""),
         ("   Wealth L. : 1bi 1bii 1c , 1d EA , 1e AWC , 1f shortfall , 1g policy", ""),
         ("   Retail    : 1bi 1bii 1c , 1g policy ; 1d/1e/1f blank ; 1i Not Applicable", ""),
-        ("   PvB       : 1bi 1bii 1c , 1d EA , 1e AWC , 1f shortfall , 1g policy (same as Wealth L.)", ""),
+        ("   PvB       : 1d EA , 1e AWC , 1f shortfall , 1g policy ; 1bi/1bii/1c Not Applicable", ""),
         ("   Wealth Lending & PvB 1i (breaches) are ENR-weighted; Retail 1i is Not Applicable", ""),
     ]
     r = 3
@@ -761,7 +761,7 @@ def _reference_sheets(wb, S, hdr, row):
          "shown as its own row; excluded from the GROUP inherent (1bi drives the pair)"),
         ("1c YoY deterioration",
          "DPD%(current) - DPD%(current - 1 year)",
-         "Wealth uses the 30+$ 'Wealth Banking' line; Wealth Lending GROUP 1bi/1bii/1c use the Retail ENR basis (Wealth Banking denom only), so they match Retail GROUP"),
+         "Wealth uses the 30+$ 'Wealth Banking' line; WL GROUP 1bi/1bii/1c use the Retail basis (Wealth Banking denom only); PvB GROUP 1bi/1bii/1c are Not Applicable"),
         ("policy exceptions rate",
          "SUM(L2+L3 over 12m, all) / SUM(new approved over 12m, all)",
          "Secured/Unsec 1e, SME/Wealth 1g; table op for all three Wealth products (Retail & PvB 1g same as Wealth Lending)"),

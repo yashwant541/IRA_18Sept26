@@ -498,7 +498,7 @@ def append_group_rows(frame, product_out, tables):
             # risk number, and drop out of the Calculated Inherent.
             val = None
             display, rating, number = "Not Applicable", "Not Applicable", None
-            note = "Not Applicable for Retail Banking"
+            note = "Not Applicable"
         elif int_key in table_ops:
             if int_key in _DPD:
                 val = dpd_group.get(canon)
@@ -658,7 +658,7 @@ def _trace_group_product(frame, product, tables):
         if (product, canon) in C.NOT_APPLICABLE:
             kind = "not applicable"
             val, display, rating, number = None, "Not Applicable", "Not Applicable", None
-            detail = [("hard-coded Not Applicable for Retail Banking", "")]
+            detail = [("hard-coded Not Applicable", "")]
         elif int_key in table_ops:
             kind = "table operation (all countries)"
             if int_key in _DPD:

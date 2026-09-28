@@ -535,5 +535,11 @@ FINAL_LABEL = "Calculated Inherent Credit Risk Assessment:"
 # (product, canonical label-id) pairs that are hard-coded "Not Applicable"
 # everywhere - per country and at GROUP - regardless of the underlying data.
 # The label shows "Not Applicable" (no risk number) and drops out of the
-# Calculated Inherent (its theme contributes nothing).
-NOT_APPLICABLE = {("Wealth Lending - Retail Banking", "1i")}
+# Calculated Inherent (its theme contributes nothing).  PvB 1bi/1bii/1c are
+# already Not Applicable per country; this makes the GROUP row match.
+NOT_APPLICABLE = {
+    ("Wealth Lending - Retail Banking", "1i"),
+    ("Wealth Lending - PvB", "1bi"),
+    ("Wealth Lending - PvB", "1bii"),
+    ("Wealth Lending - PvB", "1c"),
+}

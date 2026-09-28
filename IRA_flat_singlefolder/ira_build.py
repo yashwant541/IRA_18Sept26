@@ -80,7 +80,7 @@ def compute_country_product(tables: Dict[str, Any], country: str,
                                    number=None, group=m["group"],
                                    weight_key=m["weight_key"],
                                    int_key=getattr(m["value"], "int_key", ""),
-                                   reason="Not Applicable for Retail Banking")
+                                   reason="Not Applicable")
             continue
         try:
             rating = m["rating"](val, ctx)
