@@ -387,21 +387,100 @@ _WL_FAM = {"Wealth Lending", "Wealth Lending - Retail Banking", "Wealth Lending 
 _WL_GROUP_DET = ('=IF(AND(cur>0.25%,prior>0.25%),"Very High",IF(AND(cur>0.06%,prior>0.06%),"High",'
                  'IF(AND(cur>0.04%,prior>0.04%),"Medium",IF(AND(cur>0.01%,prior>0.01%),"Low","Very Low"))))')
 
+# ---- GROUP-row rating formulas ------------------------------------------- #
+# At GROUP an ENR-weighted label is rated by banding its weighted-sum VALUE:
+_VALUE_BAND = ('=IF(B>=4.5,"Very High",IF(B>=3.5,"High",'
+               'IF(B>=2.5,"Medium",IF(B>=1.5,"Low","Very Low"))))')
+# GROUP-only table-op ladder overrides (mirror ira_group.GROUP_RATE_OVERRIDE):
+_GRP_EA  = '=IF(B>10%,"Very High",IF(B>7.5%,"High",IF(B>5%,"Medium",IF(B>2.5%,"Low","Very Low"))))'
+_GRP_AWC = '=IF(B>12.5%,"Very High",IF(B>10%,"High",IF(B>7.5%,"Medium",IF(B>5%,"Low","Very Low"))))'
+_GRP_PVB_POL = ('=IF(B="","Not Available",IF(B>=7.5%,"Very High",IF(B>=5%,"High",'
+                'IF(B>=3%,"Medium",IF(B>=1%,"Low","Very Low")))))')
+_GROUP_OVERRIDE_FORMULA = {
+    ("Wealth Lending", "1d"): _GRP_EA,
+    ("Wealth Lending - PvB", "1d"): _GRP_EA,
+    ("Wealth Lending", "1e"): _GRP_AWC,
+    ("Wealth Lending - PvB", "1e"): _GRP_AWC,
+    ("Wealth Lending - PvB", "1g"): _GRP_PVB_POL,
+}
+
 
 def _canon_label(label) -> str:
     m = _re.match(r"^\s*([0-9]+[a-z]*)", str(label))
     return m.group(1) if m else ""
 
 
+def _ira_group():
+    try:
+        from . import ira_group as _G
+    except ImportError:
+        import ira_group as _G
+    return _G
+
+
+def _int_key_for(product: str, canon: str) -> str:
+    """int_key of (product, canon) - tells GROUP table-op labels from ENR-weighted."""
+    try:
+        for m in C.METRICS.get(product, lambda: [])():
+            if _canon_label(m["label"]) == canon:
+                ik = getattr(m.get("value"), "int_key", "") or ""
+                if not ik:
+                    _G = _ira_group()
+                    ik = _G.CANON_TO_DPD.get(canon, "")
+                return ik
+    except Exception:
+        pass
+    return ""
+
+
+def _group_formula(product: str, canon: str) -> str:
+    """Risk-rating formula for a GROUP row.  Not Applicable labels have none;
+    ENR-weighted labels band their weighted-sum value; table-op labels use their
+    ratio ladder (with GROUP overrides and the granular Wealth deterioration)."""
+    if (product, canon) in C.NOT_APPLICABLE:
+        return "Not Applicable"
+    ov = _GROUP_OVERRIDE_FORMULA.get((product, canon))
+    if ov:
+        return ov
+    _G = _ira_group()
+    tops = _G.TABLE_OP_KEYS.get(product, set(_G._DPD))
+    if _int_key_for(product, canon) in tops:               # table op
+        if product in _WL_FAM and canon in ("1bi", "1bii"):
+            return _WL_GROUP_DET                            # granular pair ladder
+        return _RATING_FORMULAS.get(product, {}).get(canon, "")
+    return _VALUE_BAND                                      # ENR-weighted -> band value
+
+
 def rating_formula_for(product: str, label, country="") -> str:
-    """The Risk Rating formula documented for one (product, label). Wealth GROUP
-    1bi/1bii use the granular pair ladder."""
+    """The Risk Rating formula documented for one (product, label).  GROUP rows
+    use the GROUP rating logic (value banding / table-op ladder / override /
+    Not Applicable); per-country rows use the per-country ladder."""
     if str(label).strip().lower().startswith("calculated"):
         return _CALC
     canon = _canon_label(label)
-    if str(country) == "GROUP" and product in _WL_FAM and canon in ("1bi", "1bii"):
-        return _WL_GROUP_DET
+    if str(country) == "GROUP":
+        return _group_formula(product, canon)
+    if (product, canon) in C.NOT_APPLICABLE:
+        return "Not Applicable"
     return _RATING_FORMULAS.get(product, {}).get(canon, "")
+
+
+def textify_formula_column(ws) -> None:
+    """Force the 'Risk Rating Formula' column to TEXT on an openpyxl worksheet so
+    Excel shows the documented formula literally instead of evaluating it (which
+    would give #NAME? - B/cur/prior/Value/Score are documentation placeholders,
+    not real cell references). Call after writing, before saving."""
+    col = None
+    for c in range(1, ws.max_column + 1):
+        if str(ws.cell(1, c).value).strip() == _FORMULA_COL:
+            col = c
+            break
+    if not col:
+        return
+    for r in range(2, ws.max_row + 1):
+        cell = ws.cell(r, col)
+        if cell.value not in (None, ""):
+            cell.data_type = "s"
 
 
 def attach_rating_formula(df: "pd.DataFrame", product: str) -> "pd.DataFrame":

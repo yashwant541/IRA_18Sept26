@@ -104,6 +104,10 @@ def _write_sheets(path, frames: dict, first=None):
 def _format(path, sheet_names):
     wb = load_workbook(path)
     for ws in wb.worksheets:
+        try:
+            B.textify_formula_column(ws)   # show formula as text, not #NAME?
+        except Exception:
+            pass
         headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
         for c in range(1, ws.max_column + 1):
             ws.cell(1, c).fill = HFILL
@@ -112,7 +116,7 @@ def _format(path, sheet_names):
             w = 22
             h = str(headers[c-1] or "")
             if h in ("Label", "Calculation", "Source table(s)", "Reason",
-                     "What to do in Value Column", "Intermediate table"):
+                     "What to do in Value Column", "Intermediate table", "Risk Rating Formula"):
                 w = 40
             elif h in ("Country", "Product", "Category", "Metric"):
                 w = 16

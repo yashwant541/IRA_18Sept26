@@ -136,9 +136,9 @@ DPD_DENOM_LINES = {"Wealth Lending": ["Wealth Banking"]}
 
 def _awc_group_ladder(value):
     """GROUP-only rating ladder for Wealth 1e (AWC proportion): >12.5% Very High,
-    >10% High, >7.5% Medium, >5% Low, else Very Low."""
+    >10% High, >7.5% Medium, >5% Low, else Very Low.  None -> no override."""
     if value is None:
-        return ""
+        return None
     if value > 0.125:  return "Very High"
     if value > 0.10:   return "High"
     if value > 0.075:  return "Medium"
@@ -146,12 +146,54 @@ def _awc_group_ladder(value):
     return "Very Low"
 
 
+def _ea_group_ladder(value):
+    """GROUP-only rating ladder for Wealth 1d (EA proportion): >10% Very High,
+    >7.5% High, >5% Medium, >2.5% Low, else Very Low.  None -> no override."""
+    if value is None:
+        return None
+    if value > 0.10:   return "Very High"
+    if value > 0.075:  return "High"
+    if value > 0.05:   return "Medium"
+    if value > 0.025:  return "Low"
+    return "Very Low"
+
+
+def _disp_group_ladder(value):
+    """GROUP-only rating ladder for Wealth 1h (dispensations), applied to the
+    weighted-sum VALUE: >=4.5 Very High, >=3.5 High, >=2.5 Medium, >=1.5 Low,
+    else Very Low.  None -> no override.  (The inherent still uses the value.)"""
+    if value is None:
+        return None
+    if value >= 4.5:   return "Very High"
+    if value >= 3.5:   return "High"
+    if value >= 2.5:   return "Medium"
+    if value >= 1.5:   return "Low"
+    return "Very Low"
+
+
+def _pvb_policy_group_ladder(value):
+    """GROUP-only rating ladder for Wealth Lending - PvB 1g (policy exceptions):
+    empty -> Not Available; >=7.5% Very High, >=5% High, >=3% Medium, >=1% Low,
+    else Very Low."""
+    if value is None:
+        return "Not Available"
+    if value >= 0.075: return "Very High"
+    if value >= 0.05:  return "High"
+    if value >= 0.03:  return "Medium"
+    if value >= 0.01:  return "Low"
+    return "Very Low"
+
+
 # GROUP-only rating override per (product, canonical id): replaces the label's
-# normal ratings ladder for the GROUP row.  Wealth Lending & PvB 1e use the AWC
-# ladder above (PvB 1e mirrors Wealth Lending 1e).
+# normal ratings ladder for the GROUP row.  Each ladder returns a rating string,
+# or None to fall back to the label's normal rating.
 GROUP_RATE_OVERRIDE = {
+    ("Wealth Lending", "1d"): _ea_group_ladder,
     ("Wealth Lending", "1e"): _awc_group_ladder,
+    ("Wealth Lending", "1h"): _disp_group_ladder,
+    ("Wealth Lending - PvB", "1d"): _ea_group_ladder,
     ("Wealth Lending - PvB", "1e"): _awc_group_ladder,
+    ("Wealth Lending - PvB", "1g"): _pvb_policy_group_ladder,
 }
 
 
@@ -507,14 +549,17 @@ def append_group_rows(frame, product_out, tables):
                 val = _ratio_value(tables, product_out, int_key)
                 rating = _rate_ratio(m, int_key, val)
             ovr = GROUP_RATE_OVERRIDE.get((product_out, canon))
-            if ovr and val is not None:
-                rating = ovr(val)                # GROUP-only ladder override (1e)
+            if ovr:                              # GROUP-only ladder override (1d/1e/1g)
+                r2 = ovr(val)                    # ladders handle empty themselves
+                if r2 is not None:
+                    rating = r2
             display = _fmt_pct(val)
             number = E.RISK_NUMBER.get(rating) if rating else None
-            note = "GROUP table operation (all countries)"
             if int_key == "shortfall" and val is None:
                 rating = "Not Available"; number = None
                 note = "Not Available - real estate/securities total not found; enter manually"
+            else:
+                note = "GROUP table operation (all countries)"
         else:
             ov = WEIGHT_OVERRIDE.get((product_out, canon))
             w = _weights(tables, product_out, countries, lines=ov) if ov else weights
@@ -526,6 +571,12 @@ def append_group_rows(frame, product_out, tables):
                 number = min(5, max(1, _round_half_up(wsum)))
                 rating = _NUM_TO_RATING[number]
                 display = round(wsum, 3)
+                ovr = GROUP_RATE_OVERRIDE.get((product_out, canon))
+                if ovr:                          # GROUP-only ladder on the VALUE (1h)
+                    r2 = ovr(wsum)
+                    if r2 is not None:
+                        rating = r2
+                        number = E.RISK_NUMBER.get(rating)
             note = "GROUP ENR-weighted (country %; basis: " + " + ".join(lines) + ")"
         group_num[canon] = number
         # table-op -> risk number; ENR-weighted -> its displayed weighted-sum value;
@@ -681,9 +732,11 @@ def _trace_group_product(frame, product, tables):
                 rating = _rate_ratio(m, int_key, val)
                 detail = _ratio_detail(tables, product, int_key, val)
             ovr = GROUP_RATE_OVERRIDE.get((product, canon))
-            if ovr and val is not None:
-                rating = ovr(val)                # GROUP-only ladder override (1e)
-                detail.append(("rated by GROUP ladder (>12.5% VH / >10% H / >7.5% M / >5% L)", rating))
+            if ovr:                              # GROUP-only ladder override (1d/1e/1g)
+                r2 = ovr(val)
+                if r2 is not None:
+                    rating = r2
+                    detail.append(("rated by GROUP rating ladder", rating))
             display = _fmt_pct(val)
             number = E.RISK_NUMBER.get(rating) if rating else None
         else:
@@ -711,7 +764,13 @@ def _trace_group_product(frame, product, tables):
                 rating = _NUM_TO_RATING[number]
                 display = round(wsum, 3)
                 detail.append(("weighted sum", round(wsum, 4)))
-                detail.append((f"rounded to nearest 1..5", number))
+                ovr = GROUP_RATE_OVERRIDE.get((product, canon))
+                if ovr and ovr(wsum) is not None:   # GROUP ladder on the VALUE (1h)
+                    rating = ovr(wsum)
+                    number = E.RISK_NUMBER.get(rating)
+                    detail.append(("rated by GROUP value ladder (>=4.5 VH/>=3.5 H/>=2.5 M/>=1.5 L)", rating))
+                else:
+                    detail.append((f"rounded to nearest 1..5", number))
         group_num[canon] = number
         if (product, canon) in C.NOT_APPLICABLE:
             group_val[canon] = None
