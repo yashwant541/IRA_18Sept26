@@ -171,10 +171,10 @@ def _disp_group_ladder(value):
     return "Very Low"
 
 
-def _pvb_policy_group_ladder(value):
-    """GROUP-only rating ladder for Wealth Lending - PvB 1g (policy exceptions):
-    empty -> Not Available; >=7.5% Very High, >=5% High, >=3% Medium, >=1% Low,
-    else Very Low."""
+def _policy_group_ladder(value):
+    """GROUP-only rating ladder for Wealth 1g (policy exceptions), shared by all
+    three Wealth products: empty -> Not Available; >=7.5% Very High, >=5% High,
+    >=3% Medium, >=1% Low, else Very Low.  The risk number follows the rating."""
     if value is None:
         return "Not Available"
     if value >= 0.075: return "Very High"
@@ -190,10 +190,12 @@ def _pvb_policy_group_ladder(value):
 GROUP_RATE_OVERRIDE = {
     ("Wealth Lending", "1d"): _ea_group_ladder,
     ("Wealth Lending", "1e"): _awc_group_ladder,
+    ("Wealth Lending", "1g"): _policy_group_ladder,
     ("Wealth Lending", "1h"): _disp_group_ladder,
+    ("Wealth Lending - Retail Banking", "1g"): _policy_group_ladder,
     ("Wealth Lending - PvB", "1d"): _ea_group_ladder,
     ("Wealth Lending - PvB", "1e"): _awc_group_ladder,
-    ("Wealth Lending - PvB", "1g"): _pvb_policy_group_ladder,
+    ("Wealth Lending - PvB", "1g"): _policy_group_ladder,
 }
 
 

@@ -394,14 +394,16 @@ _VALUE_BAND = ('=IF(B>=4.5,"Very High",IF(B>=3.5,"High",'
 # GROUP-only table-op ladder overrides (mirror ira_group.GROUP_RATE_OVERRIDE):
 _GRP_EA  = '=IF(B>10%,"Very High",IF(B>7.5%,"High",IF(B>5%,"Medium",IF(B>2.5%,"Low","Very Low"))))'
 _GRP_AWC = '=IF(B>12.5%,"Very High",IF(B>10%,"High",IF(B>7.5%,"Medium",IF(B>5%,"Low","Very Low"))))'
-_GRP_PVB_POL = ('=IF(B="","Not Available",IF(B>=7.5%,"Very High",IF(B>=5%,"High",'
-                'IF(B>=3%,"Medium",IF(B>=1%,"Low","Very Low")))))')
+_GRP_POL = ('=IF(B="","Not Available",IF(B>=7.5%,"Very High",IF(B>=5%,"High",'
+            'IF(B>=3%,"Medium",IF(B>=1%,"Low","Very Low")))))')
 _GROUP_OVERRIDE_FORMULA = {
     ("Wealth Lending", "1d"): _GRP_EA,
     ("Wealth Lending - PvB", "1d"): _GRP_EA,
     ("Wealth Lending", "1e"): _GRP_AWC,
     ("Wealth Lending - PvB", "1e"): _GRP_AWC,
-    ("Wealth Lending - PvB", "1g"): _GRP_PVB_POL,
+    ("Wealth Lending", "1g"): _GRP_POL,
+    ("Wealth Lending - Retail Banking", "1g"): _GRP_POL,
+    ("Wealth Lending - PvB", "1g"): _GRP_POL,
 }
 
 
