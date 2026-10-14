@@ -255,6 +255,34 @@ def _has_col(header_cells, wanted):
             return True
     return False
 
+
+def _detected_ref_categories(sheets, kind):
+    """Categories for which a reference-table TITLE of `kind` ('breaches' or
+    'dispensations') appears anywhere in the uploaded sheets.  Title-based, so a
+    table is detected even when it is empty / has no Y breaches at all."""
+    try:
+        from IRA import ira_reftables as RT
+    except ImportError:
+        import ira_reftables as RT
+    cats = set()
+    for _sn, rows in sheets.items():
+        for r in rows:
+            for c in r:
+                if not isinstance(c, str):
+                    continue
+                low = c.strip().lower()
+                if kind == "breaches":
+                    hit = ("credit risk appetite breaches" in low or
+                           ("appetite" in low and "breach" in low))
+                else:
+                    hit = ("active or expired" in low or "active/expired" in low
+                           or "dispensation" in low)
+                if hit:
+                    cat = RT._category_from(low)
+                    if cat:
+                        cats.add(cat)
+    return cats
+
 # ------------------------------------------------------------ validate -------
 def validate(mi, other, config) -> Dict[str, Any]:
     avail_files = [
@@ -276,15 +304,18 @@ def validate(mi, other, config) -> Dict[str, Any]:
     # sovereign
     required.append({"table": "Country Sovereign Rating & Outlook", "group": "Other tables",
                      "found": bool(tables.get("sovereign"))})
-    # dispensations & breaches per category
+    # dispensations & breaches per category.  A table counts as FOUND when its
+    # title is present in the upload - even if it is empty / has no Y breaches.
     disp = tables.get("dispensations") or {}
     brc = tables.get("cra_breaches") or {}
+    disp_cats = _detected_ref_categories(sheets, "dispensations")
+    brc_cats = _detected_ref_categories(sheets, "breaches")
     for cat in BASE_CATEGORIES:
         required.append({"table": f"Dispensations - {cat}", "group": "Other tables",
-                         "found": bool(disp.get(cat))})
+                         "found": (cat in disp_cats) or bool(disp.get(cat))})
     for cat in BASE_CATEGORIES:
         required.append({"table": f"CRA Breaches - {cat}", "group": "Other tables",
-                         "found": bool(brc.get(cat))})
+                         "found": (cat in brc_cats) or bool(brc.get(cat))})
 
     # ---- schema / column checks (non-date columns) ----------------------- #
     schema = []
@@ -300,14 +331,15 @@ def validate(mi, other, config) -> Dict[str, Any]:
     # dispensation columns (per detected table title)
     for cat, marker in (("Secured", "secured portfolio"), ("Unsecured", "unsecured portfolio"),
                         ("SME Banking", "sme portfolio"), ("Wealth Lending", "wl portfolio")):
-        hdr = _find_ref_header(sheets, [marker, "active or expired"]) if (disp.get(cat)) else None
-        if disp.get(cat):
+        present = (cat in disp_cats) or bool(disp.get(cat))
+        hdr = _find_ref_header(sheets, [marker, "active or expired"]) if present else None
+        if present:
             # if parsed, Country/# are present by construction
             schema.append({"table": f"Dispensations - {cat}", "ok": True, "missing": [],
                            "found_columns": hdr or ["Country", "#"]})
     # cra breaches columns
     for cat in BASE_CATEGORIES:
-        if brc.get(cat):
+        if (cat in brc_cats) or brc.get(cat):
             schema.append({"table": f"CRA Breaches - {cat}", "ok": True, "missing": [],
                            "found_columns": ["Country", "<monthly Y/blank>", "L12M"]})
 
@@ -318,24 +350,10 @@ def validate(mi, other, config) -> Dict[str, Any]:
             "all_found": all_found, "schema_ok": schema_ok}
 
 # ------------------------------------------------------------ analyze --------
-def run_analysis(mi, other, config, user, quarter, year) -> Dict[str, Any]:
-    now = datetime.datetime.now()
-    rid = _rid(user, quarter, year, now)
-    if not mi or not config:
-        return {"ok": False, "run_id": rid, "error": "MI file and countries config are required."}
-    sheets = _assemble(mi, other)
-    cfg = _parse_cfg(config)
-    M = _ira(); L, B = M["L"], M["B"]
-    tables = L.load_tables(sheets)
-    per_cat = B.resolve_countries(tables, None, cfg)
-    frames = B.build_all(tables, countries_per_category=cfg)
-    inter = B.build_intermediate_frames(tables, per_cat)
-    mapping = B.build_mapping()
-    try:
-        intermediates = M["I"].build(tables, per_cat)
-    except Exception:
-        intermediates = {}
-
+def _build_results(frames, per_cat):
+    """Turn engine frames into the JSON payload the UI renders: per-product,
+    per-country rows plus the Calculated/Final rows, the Not-Available list, and
+    the country lists.  Shared by the initial analysis and every re-run."""
     results, calculated, na, cbp = {}, {}, [], {}
     for cat in CATEGORIES:
         df = frames.get(f"IRA - {cat}"); results[cat] = {}; calculated[cat] = {}
@@ -360,6 +378,28 @@ def run_analysis(mi, other, config, user, quarter, year) -> Dict[str, Any]:
             rows.append({"label": FINAL_OVERRIDE_LABEL, "value": None, "rating": None,
                          "number": None, "override": True})
             results[cat][country] = rows
+    return results, calculated, na, cbp
+
+
+def run_analysis(mi, other, config, user, quarter, year) -> Dict[str, Any]:
+    now = datetime.datetime.now()
+    rid = _rid(user, quarter, year, now)
+    if not mi or not config:
+        return {"ok": False, "run_id": rid, "error": "MI file and countries config are required."}
+    sheets = _assemble(mi, other)
+    cfg = _parse_cfg(config)
+    M = _ira(); L, B = M["L"], M["B"]
+    tables = L.load_tables(sheets)
+    per_cat = B.resolve_countries(tables, None, cfg)
+    frames = B.build_all(tables, countries_per_category=cfg)
+    inter = B.build_intermediate_frames(tables, per_cat)
+    mapping = B.build_mapping()
+    try:
+        intermediates = M["I"].build(tables, per_cat)
+    except Exception:
+        intermediates = {}
+
+    results, calculated, na, cbp = _build_results(frames, per_cat)
 
     meta = {"run_id": rid, "user": user, "quarter": quarter, "year": year,
             "mi_period": _mi_period(tables),
@@ -370,7 +410,8 @@ def run_analysis(mi, other, config, user, quarter, year) -> Dict[str, Any]:
     except Exception: xls = None
     RUN_CACHE[rid] = {"excel": xls, "meta": meta, "results": results, "calculated": calculated,
                       "frames": frames, "inter": inter, "mapping": mapping, "tables": tables,
-                      "per_cat": per_cat, "intermediates": intermediates}
+                      "per_cat": per_cat, "intermediates": intermediates, "cfg": cfg,
+                      "manual_map": {}}
     return {"ok": True, "run_id": rid, "meta": meta, "na_details": na,
             "countries_by_product": cbp, "results": results, "calculated": calculated,
             "excel_ready": xls is not None}
@@ -438,6 +479,10 @@ def _excel(frames, inter, mapping, overrides=None, manual=None):
     hf = PatternFill("solid", fgColor="E8EEF7"); hfont = Font(bold=True, color="1F3A5F", size=10)
     thin = Side(style="thin", color="DCE3EF"); bd = Border(left=thin, right=thin, top=thin, bottom=thin)
     for ws in wb.worksheets:
+        try:
+            _IRB.textify_formula_column(ws)   # show formula as text, not #NAME?
+        except Exception:
+            pass
         rc = None
         for c in range(1, ws.max_column + 1):
             ws.cell(1, c).fill = hf; ws.cell(1, c).font = hfont
@@ -536,6 +581,35 @@ def _period_workbook(cached):
     return base64.b64encode(outb.getvalue()).decode("ascii"), out_df
 
 
+def _input_workbook(cached):
+    """Every parsed INPUT value as one long sheet:
+    Period | Type | Country | Segment | Value | Month.  Returns base64 xlsx."""
+    try:
+        from IRA import ira_inputs as IN
+    except ImportError:
+        import ira_inputs as IN
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    period = _period_label(cached["meta"])
+    df = IN.input_dataframe(cached.get("tables", {}) or {}, period)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        (df if not df.empty else pd.DataFrame(columns=IN.COLUMNS)).to_excel(
+            xw, sheet_name="Input Data", index=False)
+        ws = xw.sheets["Input Data"]
+        hf = PatternFill("solid", fgColor="13213C")
+        hfont = Font(color="FFFFFF", bold=True)
+        widths = {"Period": 12, "Type": 24, "Country": 22, "Segment": 26, "Value": 16, "Month": 10}
+        for c in range(1, ws.max_column + 1):
+            ws.cell(1, c).fill = hf
+            ws.cell(1, c).font = hfont
+            ws.cell(1, c).alignment = Alignment(vertical="center")
+            ws.column_dimensions[get_column_letter(c)].width = widths.get(
+                str(ws.cell(1, c).value), 16)
+        ws.freeze_panes = "A2"
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _inject(df, cat, ov):
     rows = []
     for country, grp in df.groupby("Country", sort=False):
@@ -574,33 +648,66 @@ def _rate_value(product, label, value):
                 return ""
     return ""
 
-def _recompute_inherent(frame, product, country):
-    """Recompute a country's Calculated inherent from the frame's risk numbers
-    (max per theme x weight, 1bii excluded) - used after a manual entry."""
+def _recompute_inherent(frame, product, country, exclude_1bii=False):
+    """Recompute a country's (or GROUP's) Calculated inherent: max per theme x
+    theme weight.  Per-country includes 1bii and uses risk numbers (as the build
+    does).  GROUP excludes 1bii (exclude_1bii=True) and, for ENR-weighted labels,
+    uses their continuous weighted-sum VALUE rather than the rounded risk number -
+    table-op labels still use their risk number (exactly like ira_group)."""
     C = _cfg()
+    try:
+        from IRA import ira_group as G
+    except Exception:
+        import ira_group as G
+    use_values = (country == "GROUP")
+    table_ops = G.TABLE_OP_KEYS.get(product, set(G._DPD)) if use_values else set()
+    ikey = {}
+    if use_values:
+        for m in C.METRICS.get(product, lambda: [])():
+            cn = _canon(m["label"])
+            ik = getattr(m.get("value"), "int_key", m.get("value"))
+            if (not ik) and cn in G.CANON_TO_DPD:
+                ik = G.CANON_TO_DPD[cn]
+            ikey[cn] = ik
     sub = frame[frame["Country"] == country]
     num = {}
     for _, r in sub.iterrows():
         lab = str(r.get("Label", ""))
         if lab.startswith("Calculated"): continue
-        n = r.get("Risk Number", "")
-        try: num[_canon(lab)] = float(n) if n not in ("", None) else None
-        except Exception: num[_canon(lab)] = None
+        cn = _canon(lab)
+        rn = r.get("Risk Number", "")
+        try: rnum = float(rn) if rn not in ("", None) else None
+        except Exception: rnum = None
+        if use_values and (ikey.get(cn) not in table_ops):
+            val = r.get("Value"); v = None          # ENR-weighted -> weighted-sum value
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                v = float(val)
+            elif isinstance(val, str) and val.strip() and "%" not in val:
+                try: v = float(val)
+                except Exception: v = None
+            num[cn] = v if v is not None else rnum
+        else:
+            num[cn] = rnum
     groups = C.AGG_GROUPS.get(product, [])
-    weight = (1.0/len(groups)) if (getattr(C, "NORMALISE_WEIGHTS", False) and groups) else C.W6
+    weights = C.theme_weights(product) if hasattr(C, "theme_weights") else \
+        [((1.0/len(groups)) if (getattr(C, "NORMALISE_WEIGHTS", False) and groups) else C.W6)] * len(groups)
     ordered = [_canon(m["label"]) for m in C.METRICS.get(product, lambda: [])()]
     score = 0.0
-    for positions in groups:
+    for gi, positions in enumerate(groups):
         theme = []
         for p in positions:
             if 1 <= p <= len(ordered):
                 canon = ordered[p-1]
-                if canon == "1bii": continue
+                if exclude_1bii and canon == "1bii": continue
                 v = num.get(canon)
                 if v is not None: theme.append(v)
-        if theme: score += weight * max(theme)
+        if theme: score += weights[gi] * max(theme)
+    rs = round(score, getattr(C, "SCORE_DP", 4))
+    fn = getattr(C, "inherent_band", None)
+    if fn is not None:
+        return rs, fn(rs)
     def s2r(x): return "Very High" if x>=4.5 else "High" if x>=3.5 else "Medium" if x>=2.5 else "Low" if x>=1.5 else "Very Low"
-    return round(score, 4), s2r(score)
+    return rs, s2r(rs)
 
 def _na_values(frames):
     """List every cell that came out Not Available, as {product, country, label}."""
@@ -613,45 +720,204 @@ def _na_values(frames):
             out.append({"product": prod, "country": r.get("Country"), "label": r.get("Label")})
     return out
 
-def _apply_manual(c, product, country, label, value):
-    """Write a manual value into the cached frame, re-rate it, recompute that
-    country's inherent, and record it for the Manual Numbers sheet."""
-    import re
-    frame = c["frames"].get(f"IRA - {product}")
-    if frame is None: return {"ok": False, "error": "Unknown product."}
-    mask = (frame["Country"] == country) & (frame["Label"] == label)
-    if not mask.any(): return {"ok": False, "error": "Cell not found."}
-    rating = _rate_value(product, label, value)
+def _disp_val(product, label, value):
+    """Format a manually-entered value the way the engine would: % for rate/ratio
+    metrics, an integer for count metrics, and pass-through for text (outlook/grading)."""
+    C = _cfg()
+    ik = ""
+    for m in C.METRICS.get(product, lambda: [])():
+        if m["label"] == label:
+            ik = getattr(m.get("value"), "int_key", "") or ""
+            break
+    try:
+        fv = float(value)
+    except Exception:
+        return value                                   # outlook / grading strings
+    count_keys = {"dispensations", "breaches"}
+    if ik in count_keys:
+        return int(fv) if float(fv).is_integer() else fv
+    return f"{fv*100:.2f}%"
+
+
+def _metric_type(product, label):
+    """Coarse type of a metric, for the missing-values template and parsing:
+    'percent' (rate/ratio), 'count' (dispensations/breaches), 'outlook', 'grade'."""
+    C = _cfg()
+    for m in C.METRICS.get(product, lambda: [])():
+        if m["label"] == label:
+            ik = getattr(m.get("value"), "int_key", "") or ""
+            if ik in ("dispensations", "breaches"): return "count"
+            if ik in ("sovereign_outlook", "outlook"): return "outlook"
+            if ik in ("sovereign_grade", "grade"): return "grade"
+            return "percent"
+    return "percent"
+
+
+_MISSING_HINTS = {"percent": "decimal fraction, e.g. 0.02 = 2%",
+                  "count": "whole number, e.g. 3",
+                  "outlook": "Positive / Stable / Negative",
+                  "grade": "grade code, e.g. 5B"}
+
+
+def _missing_workbook(frames):
+    """Build a one-sheet Excel template of every Not-Available cell, with a blank
+    (yellow) Value column for the user to fill and re-upload."""
+    import io as _io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Missing values"
+    heads = ["Product", "Country", "Label", "Type", "How to enter", "Value"]
+    for i, h in enumerate(heads, 1):
+        cc = ws.cell(1, i, h)
+        cc.font = Font(bold=True, color="FFFFFF")
+        cc.fill = PatternFill("solid", fgColor="204E6A")
+    yellow = PatternFill("solid", fgColor="FFF3CD")
+    r = 2
+    for it in _na_values(frames):
+        t = _metric_type(it["product"], it["label"])
+        ws.cell(r, 1, it["product"]); ws.cell(r, 2, it["country"]); ws.cell(r, 3, it["label"])
+        ws.cell(r, 4, t); ws.cell(r, 5, _MISSING_HINTS.get(t, ""))
+        ws.cell(r, 6).fill = yellow
+        r += 1
+    for col, w in zip("ABCDEF", [30, 16, 46, 10, 34, 14]):
+        ws.column_dimensions[col].width = w
+    ws.freeze_panes = "A2"
+    buf = _io.BytesIO(); wb.save(buf); return buf.getvalue()
+
+
+def _parse_missing_workbook(raw):
+    """Read a filled missing-values template back into a list of
+    {product, country, label, value} - only rows whose Value was filled in."""
+    import io as _io
+    import openpyxl
+    wb = openpyxl.load_workbook(_io.BytesIO(raw), data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+    hdr = [str(h or "").strip().lower() for h in rows[0]]
+    def idx(name):
+        for i, h in enumerate(hdr):
+            if h == name:
+                return i
+        return -1
+    ip, ic, il, iv = idx("product"), idx("country"), idx("label"), idx("value")
+    if min(ip, ic, il, iv) < 0:
+        raise ValueError("template must have Product, Country, Label and Value columns")
+    out = []
+    for row in rows[1:]:
+        p = row[ip] if ip < len(row) else None
+        co = row[ic] if ic < len(row) else None
+        lab = row[il] if il < len(row) else None
+        val = row[iv] if iv < len(row) else None
+        if p and co and lab and val not in (None, ""):
+            out.append({"product": str(p).strip(), "country": str(co).strip(),
+                        "label": str(lab).strip(), "value": val})
+    return out
+
+
+def _patch_cell(df, country, label, product, val, group=False):
+    """Set one row's value/rating/number from a manual entry; return the manual record."""
     try:
         from IRA import ira_engine as E
     except Exception:
         import ira_engine as E
+    mask = (df["Country"] == country) & (df["Label"] == label)
+    if not mask.any():
+        return None
+    rating = _rate_value(product, label, val)
     number = E.RISK_NUMBER.get(rating) if rating else ""
-    # numeric metrics show as %, everything else as-is
-    disp = value
-    try: disp = f"{float(value)*100:.2f}%"
-    except Exception: pass
-    frame.loc[mask, "Value"] = disp
-    frame.loc[mask, "Risk Rating"] = rating or ""
-    frame.loc[mask, "Risk Number"] = number if number is not None else ""
-    if "What to do in Value Column" in frame.columns:
-        frame.loc[mask, "What to do in Value Column"] = "Manually entered value"
-    # recompute the Calculated inherent for this country
-    score, srating = _recompute_inherent(frame, product, country)
-    cmask = (frame["Country"] == country) & (frame["Label"].astype(str).str.startswith("Calculated"))
-    if cmask.any():
-        frame.loc[cmask, "Value"] = score; frame.loc[cmask, "Risk Rating"] = srating
-    c.setdefault("manual", []).append({"Product": product, "Country": country, "Label": label,
-                                       "Manual Value": disp, "Risk Rating": rating or "",
-                                       "Risk Number": number if number is not None else ""})
-    c.setdefault("calculated", {}).setdefault(product, {})[country] = {"rating": srating, "value": score}
+    disp = _disp_val(product, label, val)
+    df.loc[mask, "Value"] = disp
+    df.loc[mask, "Risk Rating"] = rating or ""
+    df.loc[mask, "Risk Number"] = number if number is not None else ""
+    if "What to do in Value Column" in df.columns:
+        df.loc[mask, "What to do in Value Column"] = "Manually entered value" + (" (GROUP)" if group else "")
+    return {"Product": product, "Country": country, "Label": label, "Manual Value": disp,
+            "Risk Rating": rating or "", "Risk Number": number if number is not None else ""}
+
+
+def _rerun(c):
+    """Full recompute from the cached tables + every accumulated manual override:
+    rebuilds the run, re-rates each overridden label, and recomputes each country's
+    Calculated inherent AND all GROUP rows - exactly like a fresh run with the
+    manual values fed in."""
+    try:
+        from IRA import ira_build as B, ira_group as G
+    except Exception:
+        import ira_build as B, ira_group as G
+    tables, cfg = c["tables"], c.get("cfg")
+    overrides = c.get("manual_map", {})
+    frames = B.build_all(tables, countries_per_category=cfg)
+    base = {name: df[df["Country"] != "GROUP"].copy() for name, df in frames.items()}
+    manual_rows, touched = [], set()
+    # 1) per-country overrides
+    for (product, country, label), val in overrides.items():
+        if country == "GROUP":
+            continue
+        df = base.get(f"IRA - {product}")
+        if df is None:
+            continue
+        rec = _patch_cell(df, country, label, product, val)
+        if rec:
+            manual_rows.append(rec); touched.add((product, country))
+    # 2) recompute per-country Calculated for affected countries (includes 1bii, like the build)
+    calc = c.get("calculated", {})
+    for (product, country) in touched:
+        df = base.get(f"IRA - {product}")
+        score, srating = _recompute_inherent(df, product, country, exclude_1bii=False)
+        cmask = (df["Country"] == country) & (df["Label"].astype(str).str.startswith("Calculated"))
+        if cmask.any():
+            df.loc[cmask, "Value"] = score; df.loc[cmask, "Risk Rating"] = srating
+        calc.setdefault(product, {})[country] = {"rating": srating, "value": score}
+    # 3) rebuild GROUP rows from the (overridden) per-country numbers
+    frames = G.append_all(base, tables)
+    # 4) GROUP-row overrides (e.g. a supplied GROUP shortfall) then recompute GROUP inherent
+    gtouched = set()
+    for (product, country, label), val in overrides.items():
+        if country != "GROUP":
+            continue
+        df = frames.get(f"IRA - {product}")
+        if df is None:
+            continue
+        rec = _patch_cell(df, "GROUP", label, product, val, group=True)
+        if rec:
+            manual_rows.append(rec); gtouched.add(product)
+    for product in gtouched:
+        df = frames[f"IRA - {product}"]
+        score, srating = _recompute_inherent(df, product, "GROUP", exclude_1bii=True)
+        cmask = (df["Country"] == "GROUP") & (df["Label"].astype(str).str.startswith("Calculated"))
+        if cmask.any():
+            df.loc[cmask, "Value"] = score; df.loc[cmask, "Risk Rating"] = srating
+    c["frames"] = frames
+    c["manual"] = manual_rows
+    c["calculated"] = calc
     try:
         c["excel"] = _excel(c["frames"], c["inter"], c["mapping"],
-                            overrides=c.get("overrides_last"), manual=c.get("manual"))
-    except Exception: pass
+                            overrides=c.get("overrides_last"), manual=manual_rows)
+    except Exception:
+        pass
+
+
+def _apply_manual(c, product, country, label, value):
+    """Record a manual value and trigger a FULL re-run so the label's rating, the
+    country's Calculated inherent, and every dependent GROUP row are recomputed."""
+    frame = c["frames"].get(f"IRA - {product}")
+    if frame is None:
+        return {"ok": False, "error": "Unknown product."}
+    if not ((frame["Country"] == country) & (frame["Label"] == label)).any():
+        return {"ok": False, "error": "Cell not found."}
+    c.setdefault("manual_map", {})[(product, country, label)] = value
+    _rerun(c)
+    df = c["frames"].get(f"IRA - {product}")
+    row = df[(df["Country"] == country) & (df["Label"] == label)]
+    r0 = row.iloc[0] if len(row) else {}
+    ccc = c.get("calculated", {}).get(product, {}).get(country, {})
     return {"ok": True, "product": product, "country": country, "label": label,
-            "value": disp, "rating": rating or "", "number": number if number is not None else "",
-            "calculated": {"rating": srating, "value": score}}
+            "value": (r0.get("Value") if len(row) else value),
+            "rating": (r0.get("Risk Rating") if len(row) else ""),
+            "number": (r0.get("Risk Number") if len(row) else ""),
+            "calculated": {"rating": ccc.get("rating"), "value": ccc.get("value")}}
 
 def _parse_override_file(raw, filename=""):
     """Parse an uploaded overrides file into approve-style rows.
@@ -801,6 +1067,22 @@ try:
         except Exception as ex:
             return _J({"ok": False, "error": str(ex)}, 500)
 
+    @app.route("/download_input/<run_id>")
+    def download_input_ep(run_id):
+        """All parsed input data as one long sheet: Period|Type|Country|Segment|Value|Month."""
+        c = RUN_CACHE.get(run_id)
+        if not c or not c.get("tables"):
+            return _J({"ok": False, "error": "Run not found (re-run the analysis)."}, 404)
+        try:
+            data = base64.b64decode(_input_workbook(c))
+            period = _period_label(c["meta"]).replace(" ", "_").replace("/", "-") or "period"
+            return app.response_class(
+                data, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="IRA_Input_Data_{period}_{run_id}.xlsx"'})
+        except Exception as ex:
+            return _J({"ok": False, "error": f"{type(ex).__name__}: {ex}",
+                       "trace": traceback.format_exc()}, 500)
+
     @app.route("/tables_preview", methods=["POST"])
     def tables_preview_ep():
         """Parse the just-uploaded files and return every table as a grid, so the
@@ -871,7 +1153,83 @@ try:
         c = RUN_CACHE.get(run_id)
         if not c or not c.get("frames"):
             return _J({"ok": False, "error": "Run not found (re-run the analysis)."}, 404)
-        return _J({"ok": True, "na": _na_values(c["frames"]), "manual": c.get("manual", [])})
+        return _J({"ok": True, "na": _na_values(c["frames"]), "manual": c.get("manual", []),
+                   "pending": len(c.get("manual_map", {}))})
+
+    @app.route("/download_missing/<run_id>")
+    def download_missing_ep(run_id):
+        c = RUN_CACHE.get(run_id)
+        if not c or not c.get("frames"):
+            return _J({"ok": False, "error": "Run not found (re-run the analysis)."}, 404)
+        try:
+            data = _missing_workbook(c["frames"])
+            period = _period_label(c["meta"]).replace(" ", "_").replace("/", "-") or "period"
+            return app.response_class(
+                data, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="IRA_Missing_{period}_{run_id}.xlsx"'})
+        except Exception as ex:
+            return _J({"ok": False, "error": f"{type(ex).__name__}: {ex}",
+                       "trace": traceback.format_exc()}, 500)
+
+    @app.route("/store_manual/<run_id>", methods=["POST"])
+    def store_manual_ep(run_id):
+        """Store one or more manual values WITHOUT recomputing - the user then hits
+        Re-run once all values are fed in."""
+        c = RUN_CACHE.get(run_id)
+        if not c or not c.get("frames"):
+            return _J({"ok": False, "error": "Run not found (re-run the analysis)."}, 404)
+        b = request.get_json(force=True, silent=True) or {}
+        items = b.get("items")
+        if items is None:
+            items = [{"product": b.get("product"), "country": b.get("country"),
+                      "label": b.get("label"), "value": b.get("value")}]
+        mm = c.setdefault("manual_map", {}); n = 0
+        for it in items:
+            p, co, lab, val = it.get("product"), it.get("country"), it.get("label"), it.get("value")
+            if p and co and lab and val not in (None, ""):
+                mm[(p, co, lab)] = val; n += 1
+        return _J({"ok": True, "stored": n, "pending": len(mm)})
+
+    @app.route("/upload_missing/<run_id>", methods=["POST"])
+    def upload_missing_ep(run_id):
+        """Read a filled missing-values template and stage every supplied value
+        (no recompute yet - the Re-run button does that)."""
+        c = RUN_CACHE.get(run_id)
+        if not c or not c.get("frames"):
+            return _J({"ok": False, "error": "Run not found (re-run the analysis)."}, 404)
+        f = request.files.get("file")
+        if not f:
+            return _J({"ok": False, "error": "No file uploaded."}, 400)
+        try:
+            items = _parse_missing_workbook(f.read())
+        except Exception as ex:
+            return _J({"ok": False, "error": f"{type(ex).__name__}: {ex}"}, 400)
+        mm = c.setdefault("manual_map", {})
+        for it in items:
+            mm[(it["product"], it["country"], it["label"])] = it["value"]
+        return _J({"ok": True, "stored": len(items), "items": items, "pending": len(mm)})
+
+    @app.route("/rerun/<run_id>", methods=["POST"])
+    def rerun_ep(run_id):
+        """Recompute everything from the cached tables + all staged manual values."""
+        c = RUN_CACHE.get(run_id)
+        if not c or not c.get("frames"):
+            return _J({"ok": False, "error": "Run not found (re-run the analysis)."}, 404)
+        try:
+            _rerun(c)
+            results, calculated, na, cbp = _build_results(c["frames"], c.get("per_cat", {}))
+            c["results"] = results
+            c["calculated"] = calculated
+            if isinstance(c.get("meta"), dict):
+                c["meta"]["na_count"] = len(na)
+            return _J({"ok": True, "na": _na_values(c["frames"]),
+                       "manual": c.get("manual", []), "pending": len(c.get("manual_map", {})),
+                       "results": results, "calculated": calculated,
+                       "countries_by_product": cbp})
+        except Exception as ex:
+            return _J({"ok": False, "error": f"{type(ex).__name__}: {ex}",
+                       "trace": traceback.format_exc()}, 500)
+
 
     @app.route("/set_manual/<run_id>", methods=["POST"])
     def set_manual_ep(run_id):

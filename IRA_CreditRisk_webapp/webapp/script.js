@@ -214,8 +214,24 @@
     $("#countryFilter").onchange=renderResult;
     loadNA();
     var rb=$("#btnRefreshNA"); if(rb) rb.onclick=loadNA;
+    var dm=$("#btnDownloadMissing"); if(dm) dm.onclick=function(){
+      if(!RUN_ID){ toast("Run an assessment first"); return; }
+      window.open(bu("/download_missing/"+encodeURIComponent(RUN_ID)),"_blank");
+      toast("Downloading the missing-values template…");
+    };
+    var mf=$("#missingFile"); if(mf) mf.onchange=function(){
+      var f=mf.files&&mf.files[0]; if(f){ uploadMissing(f); } mf.value="";
+    };
+    var rr=$("#btnRerun"); if(rr) rr.onclick=rerunCalcs;
+    updatePending(0);
   }
-  // ---- issue 2: manually feed Not-Available numbers ----
+  // ---- Missing data: stage Not-Available numbers, then Re-run once ----
+  var staged={};                          // "P||C||L" -> value fed but not yet re-run
+  function naKey(p,c,l){ return p+"||"+c+"||"+l; }
+  function updatePending(n){
+    var el=$("#pendingCounter"); if(!el) return;
+    el.textContent = n>0 ? (n+" value"+(n===1?"":"s")+" staged — press Re-run") : "";
+  }
   function loadNA(){
     if(!RUN_ID){ return; }
     var host=$("#manualList"); if(!host) return;
@@ -223,45 +239,73 @@
     fetch(bu("/na_values/"+encodeURIComponent(RUN_ID))).then(function(r){return r.json();}).then(function(res){
       if(!res.ok){ host.innerHTML="<p class='muted'>"+esc(res.error||"Could not load")+"</p>"; return; }
       renderNA(res.na||[], res.manual||[]);
+      updatePending(Object.keys(staged).length);
     }).catch(function(e){ host.innerHTML="<p class='muted'>"+esc(String(e))+"</p>"; });
   }
   function renderNA(na, manual){
     var host=$("#manualList");
     var badge=$("#missingBadge"); if(badge){ var nn=(na||[]).length; badge.textContent=nn+" missing"; }
-    var doneKeys={}; (manual||[]).forEach(function(m){ doneKeys[m.Product+"||"+m.Country+"||"+m.Label]=m; });
     if(!na.length && !(manual||[]).length){ host.innerHTML="<p class='muted'>No Not-Available values — nothing to feed.</p>"; return; }
     var h="<table><thead><tr><th>Product</th><th>Country</th><th>Label</th><th>Value</th><th></th></tr></thead><tbody>";
     (manual||[]).forEach(function(m){
-      h+="<tr style='background:#f6fff9'><td>"+esc(m.Product)+"</td><td>"+esc(m.Country)+"</td><td>"+esc(m.Label)+"</td><td>"+esc(m["Manual Value"])+" "+rateChip(m["Risk Rating"])+"</td><td class='muted'>manually put number</td></tr>";
+      h+="<tr style='background:#f6fff9'><td>"+esc(m.Product)+"</td><td>"+esc(m.Country)+"</td><td>"+esc(m.Label)+"</td><td>"+esc(m["Manual Value"])+" "+rateChip(m["Risk Rating"])+"</td><td class='muted'>manually entered</td></tr>";
     });
     na.forEach(function(x,i){
-      var id="man"+i;
-      h+="<tr><td>"+esc(x.product)+"</td><td>"+esc(x.country)+"</td><td>"+esc(x.label)+"</td>"+
-         "<td><input class='input' id='"+id+"' style='width:110px' placeholder='e.g. 0.02'></td>"+
-         "<td><button class='btn ghost small' data-p=\""+esc(x.product)+"\" data-c=\""+esc(x.country)+"\" data-l=\""+esc(x.label)+"\" data-i='"+id+"'>Feed &amp; recalc</button></td></tr>";
+      var id="man"+i, sv=staged[naKey(x.product,x.country,x.label)];
+      var isStaged=(sv!==undefined);
+      var pre=isStaged?(" value=\""+esc(sv)+"\""):"";
+      var chip=isStaged?" <span class='muted' style='color:#0a7d3c;font-weight:600'>staged ✓</span>":"";
+      h+="<tr"+(isStaged?" style='background:#fffdf0'":"")+"><td>"+esc(x.product)+"</td><td>"+esc(x.country)+"</td><td>"+esc(x.label)+"</td>"+
+         "<td><input class='input' id='"+id+"' style='width:110px' placeholder='e.g. 0.02'"+pre+">"+chip+"</td>"+
+         "<td><button class='btn ghost small' data-p=\""+esc(x.product)+"\" data-c=\""+esc(x.country)+"\" data-l=\""+esc(x.label)+"\" data-i='"+id+"'>"+(isStaged?"Update":"Feed")+"</button></td></tr>";
     });
     host.innerHTML=h+"</tbody></table>";
     Array.prototype.forEach.call(host.querySelectorAll("button[data-i]"),function(b){
       b.onclick=function(){
-        var val=($("#"+b.getAttribute("data-i"))||{}).value;
+        var inp=$("#"+b.getAttribute("data-i"));
+        var val=inp?inp.value:"";
         if(val===undefined||val===""){ toast("Enter a number"); return; }
-        submitManual(b.getAttribute("data-p"),b.getAttribute("data-c"),b.getAttribute("data-l"),val);
+        stageManual(b.getAttribute("data-p"),b.getAttribute("data-c"),b.getAttribute("data-l"),val);
       };
     });
   }
-  function submitManual(product,country,label,value){
-    post("/set_manual/"+encodeURIComponent(RUN_ID),{product:product,country:country,label:label,value:value}).then(function(r){
+  function stageManual(product,country,label,value){
+    post("/store_manual/"+encodeURIComponent(RUN_ID),{items:[{product:product,country:country,label:label,value:value}]}).then(function(r){
       if(!r.ok){ toast(r.error||"Failed"); return; }
-      toast("Fed "+product+" · "+country+" — recalculated");
-      // reflect in the cached results so the output table updates
-      var rows=((DATA.results[product]||{})[country])||[];
-      rows.forEach(function(row){
-        if(row.label===label){ row.value=r.value; row.rating=r.rating; row.number=r.number; }
-        if(row.calc && r.calculated){ row.value=r.calculated.value; row.rating=r.calculated.rating; }
-      });
-      if(DATA.calculated&&DATA.calculated[product]) DATA.calculated[product][country]=r.calculated;
-      if(curProd()===product && curCountry()===country) renderResult();
+      staged[naKey(product,country,label)]=value;
+      toast("Staged "+product+" · "+country+" — press Re-run when ready");
+      updatePending(Object.keys(staged).length);
       loadNA();
+    });
+  }
+  function uploadMissing(file){
+    var fd=new FormData(); fd.append("file",file);
+    toast("Uploading filled values…");
+    fetch(bu("/upload_missing/"+encodeURIComponent(RUN_ID)),{method:"POST",body:fd})
+      .then(function(r){return r.json();})
+      .then(function(res){
+        if(!res.ok){ toast(res.error||"Upload failed"); return; }
+        (res.items||[]).forEach(function(it){ staged[naKey(it.product,it.country,it.label)]=it.value; });
+        toast("Staged "+(res.stored||0)+" value"+((res.stored===1)?"":"s")+" — press Re-run");
+        updatePending(Object.keys(staged).length);
+        loadNA();
+      }).catch(function(e){ toast(String(e)); });
+  }
+  function rerunCalcs(){
+    if(!RUN_ID){ toast("Run an assessment first"); return; }
+    var btn=$("#btnRerun"); if(btn){ btn.disabled=true; btn.textContent="↻ Re-running…"; }
+    post("/rerun/"+encodeURIComponent(RUN_ID),{}).then(function(res){
+      if(btn){ btn.disabled=false; btn.textContent="↻ Re-run calculations"; }
+      if(!res.ok){ toast(res.error||"Re-run failed"); return; }
+      staged={};
+      if(res.results) DATA.results=res.results;
+      if(res.calculated) DATA.calculated=res.calculated;
+      if(res.countries_by_product) DATA.countries_by_product=res.countries_by_product;
+      if(DATA.meta) DATA.meta.na_count=(res.na||[]).length;
+      renderNA(res.na||[], res.manual||[]);
+      updatePending(0);
+      renderOutStats(); renderResult();
+      toast("Recalculated — dependent values and GROUP roll-ups updated");
     });
   }
   function curProd(){ return $("#productFilter").value; }
@@ -292,6 +336,11 @@
     if(!RUN_ID){ toast("Run first"); return; }
     window.open(bu("/download_period/"+encodeURIComponent(RUN_ID)),"_blank");
     toast("Downloading output (with Period "+(DATA.meta.mi_period||"")+")");
+  });
+  $("#btnInput").addEventListener("click",function(){
+    if(!RUN_ID){ toast("Run first"); return; }
+    window.open(bu("/download_input/"+encodeURIComponent(RUN_ID)),"_blank");
+    toast("Downloading input data (Period | Type | Country | Segment | Value | Month)");
   });
   $("#btnIntermediate").addEventListener("click",function(){
     if(!RUN_ID){ toast("Run first"); return; }
