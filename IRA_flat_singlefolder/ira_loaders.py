@@ -147,6 +147,16 @@ def load_tables(sheets: Dict[str, List[List[Any]]],
     if ref.get("interest_rates"):
         tables["interest_rates"] = ref["interest_rates"]
 
+    # --- WM_Shortfall (Wealth Lending Private Banking shortfall tables) ----- #
+    raw = get("WM_Shortfall", "WM Shortfall", "WMShortfall")
+    if raw is None:                       # fuzzy: any sheet whose name mentions shortfall
+        for k in sheets:
+            if "shortfall" in _norm(k):
+                raw = sheets[k]
+                break
+    if raw is not None:
+        tables["wm_shortfall"] = parse_wm_shortfall(raw)
+
     # --- fabricate anything still missing (so the pipeline always runs) ---- #
     countries = _all_countries(tables)
     tables.setdefault("sovereign", None)
@@ -165,6 +175,128 @@ def load_tables(sheets: Dict[str, List[List[Any]]],
 # --------------------------------------------------------------------------- #
 #  helpers
 # --------------------------------------------------------------------------- #
+def parse_wm_shortfall(rows: List[List[Any]]) -> Dict[str, Dict[str, float]]:
+    """Parse the two Private Banking shortfall tables (securities/margin trading
+    and real estate) into
+        {'securities': {country: amount, '__total__': X},
+         'real_estate': {country: amount, '__total__': Y}}.
+    Detection is tolerant of title wording, row gaps and column layout: each
+    table's per-country figure is the 'Amount' column of its 'Total' row, and
+    '__total__' is the 'Total Amount' column of that same row."""
+    def cell(r, c):
+        v = rows[r][c] if 0 <= r < len(rows) and 0 <= c < len(rows[r]) else None
+        if isinstance(v, float) and v != v:      # pandas NaN -> treat as blank
+            return None
+        return v
+
+    def num_cell(v):
+        """Coerce a shortfall amount to a number: handles ints/floats, and text
+        cells like '28,755', '$4,740', ' 1600 '.  Returns None when not numeric."""
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return v
+        s = str(v).strip().replace(",", "").replace("$", "").replace("%", "")
+        if s == "" or s in ("-", "n/a", "N/A", "na", "NA"):
+            return None
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    def norm(v):
+        return "".join(ch for ch in str(v).lower() if ch.isalnum())
+
+    def find_title(*needles):
+        """First row containing a cell whose normalised text holds all needles."""
+        wants = [norm(n) for n in needles]
+        for r in range(len(rows)):
+            for c in range(min(8, len(rows[r]))):
+                v = cell(r, c)
+                if isinstance(v, str):
+                    nv = norm(v)
+                    if all(w in nv for w in wants):
+                        return r
+        return None
+
+    def parse_table(title_row):
+        out = {}
+        if title_row is None:
+            return out
+        # 1) the 'Total' row: label 'Total' (or 'Total Shortfall') in the first
+        #    few columns AND carrying numeric data (so a split 'Total client' /
+        #    'Total Amount' header cell is never mistaken for the total row).
+        total_row = None
+        for r in range(title_row + 1, min(title_row + 30, len(rows))):
+            has_total = any(isinstance(cell(r, c), str) and str(cell(r, c)).strip().lower() in ("total", "total shortfall")
+                            for c in range(min(4, len(rows[r]))))
+            has_num = any(num_cell(cell(r, c)) is not None for c in range(len(rows[r])))
+            if has_total and has_num:
+                total_row = r
+                break
+        if total_row is None:
+            return out
+        # 2) the sub-header row that labels the Clients/Amount pairs: the LAST row
+        #    above the Total row carrying exact 'Amount' cells.
+        sub = None
+        for r in range(title_row + 1, total_row):
+            if any(isinstance(cell(r, c), str) and str(cell(r, c)).strip().lower() == "amount"
+                   for c in range(len(rows[r]))):
+                sub = r
+        if sub is None:
+            sub = min(title_row + 2, total_row - 1)
+        # 3) header window = every row from just under the title down to the
+        #    sub-header; a column's header is those cells joined (so a header split
+        #    across rows - 'Total' above 'Amount' - reads as one string).
+        hwin = list(range(title_row + 1, sub + 1))
+        width = max((len(rows[r]) for r in hwin + [total_row]), default=0)
+
+        def combined(c):
+            parts = [str(cell(r, c)).strip() for r in hwin
+                     if isinstance(cell(r, c), str) and str(cell(r, c)).strip()]
+            return " ".join(parts).lower()
+
+        # 4) Total-Amount column (the GROUP figure): header holds BOTH 'total' and
+        #    'amount' but not 'client' (so 'Total client' is skipped).
+        total_amt_col = None
+        for c in range(width):
+            cm = combined(c)
+            if "total" in cm and "amount" in cm and "client" not in cm:
+                total_amt_col = c
+                break
+        # 5) per-country Amount columns: sub-header cell == 'amount'; the country
+        #    name is the nearest non-label header cell in this column, else in the
+        #    paired 'Clients' column to its left.
+        amt_cols = {}
+        _labels = {"amount", "clients", "client", "total", "usd'000", "(usd'000)"}
+        for c in range(width):
+            s = cell(sub, c)
+            if not (isinstance(s, str) and s.strip().lower() == "amount"):
+                continue
+            name = None
+            for src in (c, c - 1):
+                for r in hwin:
+                    v = cell(r, src)
+                    if isinstance(v, str) and v.strip() and v.strip().lower() not in _labels:
+                        name = v.strip()
+                if name:
+                    break
+            if name and "total" not in name.lower() and c != total_amt_col:
+                amt_cols[name] = c
+        # 6) read the figures off the Total row
+        if total_amt_col is not None:
+            out["__total__"] = num_cell(cell(total_row, total_amt_col))
+        for country, c in amt_cols.items():
+            val = num_cell(cell(total_row, c))
+            if val is not None:
+                out[country] = val
+        return out
+
+    sec = parse_table(find_title("securities") or find_title("securit") or find_title("margin"))
+    re_ = parse_table(find_title("real", "estate") or find_title("realestate"))
+    return {"securities": sec, "real_estate": re_}
+
+
 def _row_has_content(r) -> bool:
     return any(c not in (None, "") for c in r)
 

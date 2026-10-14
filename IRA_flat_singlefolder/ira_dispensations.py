@@ -37,7 +37,8 @@ except ImportError:
     import ira_engine as E
 
 
-CATEGORIES = ["Secured", "Unsecured", "SME Banking", "Wealth Lending"]
+CATEGORIES = ["Secured", "Unsecured", "SME Banking", "Wealth Lending",
+              "Wealth Lending - Retail Banking", "Wealth Lending - PvB"]
 
 # exact, case-insensitive alias words that identify each category
 _ALIASES: Dict[str, set] = {
@@ -46,10 +47,16 @@ _ALIASES: Dict[str, set] = {
     "SME Banking": {"sme", "smb", "business"},
     "Wealth Lending": {"wl", "wm", "wealth"},
 }
+# WL sub-product markers (only meaningful when a WL/wealth marker is also present):
+# 'WL_Retail ...' -> Retail Banking, 'WL_PvB ...' -> PvB, plain 'WL ...' -> total.
+_WL_RETAIL_MARKERS = {"retail"}
+_WL_PVB_MARKERS = {"pvb", "pb"}
 # a row is a dispensation TITLE if its text contains any of these markers
 _TITLE_MARKERS = ("dispensation", "active or expired")
 # the label id shown for the dispensation metric in each category's output
-LABEL_ID = {"Secured": "1f", "Unsecured": "1f", "SME Banking": "1h", "Wealth Lending": "1g"}
+LABEL_ID = {"Secured": "1f", "Unsecured": "1f", "SME Banking": "1h",
+            "Wealth Lending": "1g", "Wealth Lending - Retail Banking": "1g",
+            "Wealth Lending - PvB": "1g"}
 
 
 # --------------------------------------------------------------------------- #
@@ -64,7 +71,9 @@ def _words(s: Any) -> set:
 
 
 def _category_of(title: str) -> Optional[str]:
-    """Exact, case-insensitive word match - unsecured checked before secured."""
+    """Exact, case-insensitive word match - unsecured checked before secured.
+    The three Wealth tables (WL / WL_Retail / WL_PvB) are told apart by the
+    retail/pvb marker sitting alongside the WL/wealth marker."""
     w = _words(title)
     if w & _ALIASES["Unsecured"]:
         return "Unsecured"
@@ -73,6 +82,10 @@ def _category_of(title: str) -> Optional[str]:
     if w & _ALIASES["SME Banking"]:
         return "SME Banking"
     if w & _ALIASES["Wealth Lending"]:
+        if w & _WL_RETAIL_MARKERS:
+            return "Wealth Lending - Retail Banking"
+        if w & _WL_PVB_MARKERS:
+            return "Wealth Lending - PvB"
         return "Wealth Lending"
     return None
 

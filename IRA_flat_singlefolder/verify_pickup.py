@@ -20,7 +20,10 @@ for f in glob.glob(os.path.join(os.path.dirname(os.path.abspath(inp)) or ".","Ot
 cfg = "countries_config.csv"
 per_cat = None
 if os.path.exists(cfg):
-    from IRA import ira_countries as CC  # noqa
+    try:                                    # package (Dataiku) then flat (local)
+        from IRA import ira_countries as CC  # noqa
+    except ImportError:
+        import ira_countries as CC           # noqa
     per_cat = CC.load(cfg)
 
 tables = L.load_tables(sheets)

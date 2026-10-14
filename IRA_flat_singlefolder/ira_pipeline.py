@@ -304,6 +304,105 @@ def _base_category(product: str) -> str:
     return product
 
 
+# raw MI sheet name behind each parsed table key (Layer 2 -> Layer 1)
+RAW_SHEET = {
+    "ENR": "ENR", "30+%": "30+%", "30+$": "30+$", "90+%": "90+%", "90+$": "90+$",
+    "RWA": "RWA", "gco": "GCO %", "policy_exception": "# policy exception L2 and L3",
+    "new_approved": "#monthly new approved", "ME_EA_AWC": "ME EA AWC",
+    "PvB_EA_AWC": "PvB EA AWC", "LTV80": "LTV > 80 Excl MIP",
+    "ccpl_volatile": "CCPL Volatile by Country", "PPI": "PPI",
+    "interest_rates": "Interest Rates", "sovereign": "OtherTables: Sovereign",
+    "dispensations": "OtherTables: Dispensations", "cra_breaches": "OtherTables: CRA Breaches",
+}
+# formula key -> parsed table key(s) it reads
+KEY_TO_PARSED = {
+    "enr_yoy": ["ENR"], "dpd_qoq_cur": ["90+%", "30+%"], "dpd_qoq_prior": ["90+%", "30+%"],
+    "dpd_yoy": ["90+%", "30+%"], "dpd_pct_total": ["90+$", "30+$"],
+    "policy_exc_rate": ["policy_exception", "new_approved"],
+    "ea_prop": ["ME_EA_AWC", "PvB_EA_AWC", "ENR"], "awc_prop": ["ME_EA_AWC", "PvB_EA_AWC", "ENR"],
+    "ltv": ["LTV80"], "volatile": ["ccpl_volatile"], "ppi_yoy": ["PPI"],
+    "interest_inc": ["interest_rates"], "sovereign_outlook": ["sovereign"],
+    "sovereign_grade": ["sovereign"], "dispensations": ["dispensations"], "breaches": ["cra_breaches"],
+}
+
+
+def layer_flow(tables, out_root: str):
+    """Write the table lineage: raw sheet -> parsed table -> formula -> product/label."""
+    folder = _fresh(os.path.join(out_root, "0_flow"))
+
+    # --- per product/label lineage table --- #
+    rows = [["Layer5 Output (Product)", "Label", "Layer3 Formula (key)",
+             "Layer2 Parsed table(s)", "Layer1 Raw sheet(s)", "Applicable"]]
+    edges_raw_parsed = set()
+    edges_parsed_formula = set()
+    edges_formula_product = set()
+    for product in PRODUCTS:
+        for m in C.METRICS[product]():
+            ik = getattr(m["value"], "int_key", "")
+            parsed = [k for k in KEY_TO_PARSED.get(ik, []) if tables.get(k) is not None]
+            raws = [RAW_SHEET.get(k, k) for k in parsed]
+            rows.append([product, m["label"], ik or "(blank)",
+                         "; ".join(parsed) or "n/a", "; ".join(raws) or "n/a",
+                         "Yes" if ik else "No"])
+            for k in parsed:
+                edges_raw_parsed.add((RAW_SHEET.get(k, k), k))
+                edges_parsed_formula.add((k, ik))
+            if ik:
+                edges_formula_product.add((ik, product))
+    _write_csv(os.path.join(folder, "lineage.csv"), rows[1:], rows[0])
+
+    # --- mermaid flow diagram (raw -> parsed -> formula -> product) --- #
+    def nid(s):
+        return "n" + str(abs(hash(s)) % (10 ** 9))
+    lines = ["flowchart LR",
+             "  classDef raw fill:#eaf1ff,stroke:#1769ff;",
+             "  classDef parsed fill:#e5f8f6,stroke:#00a99d;",
+             "  classDef formula fill:#fff7e6,stroke:#e6a62f;",
+             "  classDef product fill:#f1ebff,stroke:#7253cc;"]
+    seen = {}
+    def node(label, cls):
+        if label not in seen:
+            seen[label] = nid(label)
+            lines.append(f'  {seen[label]}["{label}"]:::{cls}')
+        return seen[label]
+    for a, b in sorted(edges_raw_parsed):
+        lines.append(f"  {node(a,'raw')} --> {node(b,'parsed')}")
+    for a, b in sorted(edges_parsed_formula):
+        if b:
+            lines.append(f"  {node(a,'parsed')} --> {node('['+b+']','formula')}")
+    for a, b in sorted(edges_formula_product):
+        lines.append(f"  {node('['+a+']','formula')} --> {node(b,'product')}")
+    mermaid = "\n".join(lines)
+    with open(os.path.join(folder, "flow.md"), "w", encoding="utf-8") as fh:
+        fh.write("# Table flow (layer to layer)\n\n```mermaid\n" + mermaid + "\n```\n")
+    # standalone HTML that renders the mermaid diagram
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'><title>IRA table flow</title>"
+        "<script src='https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js'></script>"
+        "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#17233d}"
+        "h1{font-size:20px}.legend span{margin-right:16px;font-size:12px}"
+        ".k{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:middle}"
+        "</style></head><body><h1>IRA - table flow (Layer 1 -> 2 -> 3 -> 5)</h1>"
+        "<div class='legend'><span><i class='k' style='background:#eaf1ff'></i>Raw sheet</span>"
+        "<span><i class='k' style='background:#e5f8f6'></i>Parsed table</span>"
+        "<span><i class='k' style='background:#fff7e6'></i>Formula</span>"
+        "<span><i class='k' style='background:#f1ebff'></i>Product output</span></div>"
+        "<pre class='mermaid'>" + mermaid + "</pre>"
+        "<script>mermaid.initialize({startOnLoad:true,flowchart:{useMaxWidth:false}});</script>"
+        "</body></html>")
+    with open(os.path.join(folder, "flow.html"), "w", encoding="utf-8") as fh:
+        fh.write(html)
+
+    _manifest(folder, [
+        "LAYER FLOW (LINEAGE)", "=" * 40,
+        "lineage.csv : every product/label -> formula -> parsed table -> raw sheet.",
+        "flow.md     : the same as a Mermaid diagram (view on GitHub / mermaid.live).",
+        "flow.html   : open in a browser to SEE the flow rendered.",
+        "Read direction: Raw sheet -> Parsed table -> Formula -> Product output.",
+    ])
+    return folder
+
+
 # --------------------------------------------------------------------------- #
 #  LAYER 5 - process to final per-product/country output
 # --------------------------------------------------------------------------- #
@@ -359,18 +458,21 @@ def run(mi_path: str, other_paths: Optional[List[str]] = None,
     layer4_requirements(tables, per_cat, out_root)
     # L5
     layer5_output(tables, per_cat, out_root)
+    # Flow / lineage across layers
+    layer_flow(tables, out_root)
 
     _manifest(out_root, [
         "IRA LAYERED PIPELINE OUTPUT", "=" * 40,
         "Open the folders in order:",
+        "  0_flow/         - table lineage: raw -> parsed -> formula -> product (flow.html)",
         "  1_raw/          - inputs exactly as read",
         "  2_parsed/       - country x product x months, split out",
-        "  3_formulas/     - YoY / QoQ / proportions / lookups (with components)",
+        "  3_formulas/     - YoY / QoQ / proportions / lookups (with components + Period)",
         "  4_requirements/ - per-product folders: label->file map + needed inputs",
-        "  5_output/       - final per-product/country assessment + Excel",
+        "  5_output/       - final per-product/country assessment + Excel (with Period)",
         "",
-        "Each layer has a _README.txt and _index.csv.  To change a formula, edit",
-        "the engine (ira_intermediate) and re-run; to change scope, edit",
-        "countries_config.csv.",
+        "Period (e.g. 'Mar-26') is the latest month column in the MI data and is",
+        "stamped on every Layer 3 and Layer 5 table.  To change a formula, edit the",
+        "engine (ira_intermediate) and re-run; to change scope, edit countries_config.csv.",
     ])
     return out_root

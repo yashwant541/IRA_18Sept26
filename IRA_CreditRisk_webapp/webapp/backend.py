@@ -256,14 +256,31 @@ def _has_col(header_cells, wanted):
     return False
 
 
+# category keyword sets - self-contained so detection does not depend on the
+# deployed engine version.  Wealth Lending covers every Wealth sub-product name
+# (WL / WM / PvB / PB / Private / Retail), since 1i/dispensations roll up to the
+# single Wealth Lending base category.
+_CAT_WORD_SETS = [
+    ({"unsecured", "unsec"}, "Unsecured"),
+    ({"secured", "sec"}, "Secured"),
+    ({"sme", "smb", "business"}, "SME Banking"),
+    ({"wl", "wm", "wealth", "pvb", "pb", "private", "retail"}, "Wealth Lending"),
+]
+
+
+def _cat_from_title(title):
+    import re
+    words = set(re.sub(r"[^a-z0-9 ]", " ", str(title).lower()).split())
+    for ws, cat in _CAT_WORD_SETS:
+        if words & ws:
+            return cat
+    return None
+
+
 def _detected_ref_categories(sheets, kind):
     """Categories for which a reference-table TITLE of `kind` ('breaches' or
     'dispensations') appears anywhere in the uploaded sheets.  Title-based, so a
     table is detected even when it is empty / has no Y breaches at all."""
-    try:
-        from IRA import ira_reftables as RT
-    except ImportError:
-        import ira_reftables as RT
     cats = set()
     for _sn, rows in sheets.items():
         for r in rows:
@@ -273,12 +290,13 @@ def _detected_ref_categories(sheets, kind):
                 low = c.strip().lower()
                 if kind == "breaches":
                     hit = ("credit risk appetite breaches" in low or
-                           ("appetite" in low and "breach" in low))
+                           ("appetite" in low and "breach" in low) or
+                           ("cra" in low and "breach" in low))
                 else:
                     hit = ("active or expired" in low or "active/expired" in low
                            or "dispensation" in low)
                 if hit:
-                    cat = RT._category_from(low)
+                    cat = _cat_from_title(low)
                     if cat:
                         cats.add(cat)
     return cats

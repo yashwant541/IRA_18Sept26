@@ -72,6 +72,7 @@ v_country_outlook      = from_int("sovereign_outlook")
 v_country_grading      = from_int("sovereign_grade")
 v_active_dispensations = from_int("dispensations")
 v_cra_breaches         = from_int("breaches")
+v_shortfall            = from_int("shortfall")
 
 
 def v_blank(tables, country, prod_out):
@@ -101,21 +102,44 @@ def _pair_rating(ctx, cur_key, prior_key, ladder):
     return ladder[-1][1]
 
 
-# Thresholds for the DPD deterioration DIFFERENCE (current - back), as a
-# fraction (x100 = percentage points).  PLACEHOLDER - adjust to your policy.
-#   > 5pp Very High / > 3pp High / > 1pp Medium / > 0 Low / <= 0 Very Low
-DETERIORATION_LADDER = [(.05, "Very High"), (.03, "High"), (.01, "Medium"),
-                        (0, "Low"), (None, "Very Low")]
+# DPD deterioration thresholds (difference current - back, as a fraction;
+# x100 = percentage points).  Transcribed verbatim from the business IF-formulas.
+#   Secured 1bi  : AND >0.05% VH / >0.03% H / >0.02% M / >0.01% L / else VL
+#   Secured 1c   : >0.1% VH / >0.05% H / >0.03% M / >0.01% L / else VL
+#   Unsec/SME 1bi: AND >0.25% VH / >0.06% H / >0.04% M / >0.01% L / else VL
+#   Unsec/SME 1c : >0.25% VH / >0.2% H / >0.15% M / >0.1% L / else VL
+#   Wealth 1bi   : AND >0.25% VH / AND >0% H / else VL
+#   Wealth 1c    : >0.25% VH / >0% H / else VL
+DET_PAIR = {
+    "Secured": [(.0005, "Very High"), (.0003, "High"), (.0002, "Medium"),
+                (.0001, "Low"), (None, "Very Low")],
+    "Unsecured": [(.0025, "Very High"), (.0006, "High"), (.0004, "Medium"),
+                  (.0001, "Low"), (None, "Very Low")],
+    "SME Banking": [(.0025, "Very High"), (.0006, "High"), (.0004, "Medium"),
+                    (.0001, "Low"), (None, "Very Low")],
+    "Wealth": [(.0025, "Very High"), (0, "High"), (None, "Very Low")],
+}
+DET_SINGLE = {
+    "Secured": [(.001, "Very High"), (.0005, "High"), (.0003, "Medium"),
+                (.0001, "Low"), (None, "Very Low")],
+    "Unsecured": [(.0025, "Very High"), (.002, "High"), (.0015, "Medium"),
+                  (.001, "Low"), (None, "Very Low")],
+    "SME Banking": [(.0025, "Very High"), (.002, "High"), (.0015, "Medium"),
+                    (.001, "Low"), (None, "Very Low")],
+    "Wealth": [(.0025, "Very High"), (0, "High"), (None, "Very Low")],
+}
+# back-compat default (used only if a caller passes no ladder)
+DETERIORATION_LADDER = DET_SINGLE["Secured"]
 
 
-def r_deterioration(value, ctx=None):
+def r_deterioration(value, ladder=None):
     """Single-value deterioration rating (used for 1c)."""
-    return E.bands_desc(value, DETERIORATION_LADDER)
+    return E.bands_desc(value, ladder or DETERIORATION_LADDER)
 
 
-def r_deterioration_pair(ctx):
+def r_deterioration_pair(ctx, ladder=None):
     """Paired deterioration rating (used for 1bi & 1bii together)."""
-    return _pair_rating(ctx, "1bi", "1bii", DETERIORATION_LADDER)
+    return _pair_rating(ctx, "1bi", "1bii", ladder or DETERIORATION_LADDER)
 
 
 def r_grading(value, ctx=None):
@@ -154,14 +178,14 @@ def secured_metrics() -> List[dict]:
            "G1", "1a"),
         _m("1bi", "1bi.QoQ Deterioration in 90+DPD$% in Current Month",
            v_dpd_qoq_current,
-           lambda v, c: r_deterioration_pair(c),
+           lambda v, c: r_deterioration_pair(c, DET_PAIR["Secured"]),
            "G2", "delinquency"),
         _m("1bii", "1bii.QoQ Deterioration in 90+DPD$% in Prior Month",
            v_dpd_qoq_prior,
-           lambda v, c: r_deterioration_pair(c),
+           lambda v, c: r_deterioration_pair(c, DET_PAIR["Secured"]),
            "G2", "delinquency"),
         _m("1c", "1c. YoY Deterioration in 90+ DPD$%", v_dpd_yoy,
-           lambda v, c: r_deterioration(v), "G2", "delinquency"),
+           lambda v, c: r_deterioration(v, DET_SINGLE["Secured"]), "G2", "delinquency"),
         _m("1d", "1d.Country 90+DPD% Total Group 90+ Delinquency",
            v_dpd_pct_of_total,
            lambda v, c: E.bands_desc(v, [(.25, "Very High"), (.15, "High"),
@@ -208,12 +232,12 @@ def unsecured_metrics() -> List[dict]:
                                          (None, "Very Low")]), "G1", "1a"),
         _m("1bi", "1bi.QoQ Deterioration in 30+DPD$% in Current Month",
            v_dpd_qoq_current,
-           lambda v, c: r_deterioration_pair(c), "G2", "delinquency"),
+           lambda v, c: r_deterioration_pair(c, DET_PAIR["Unsecured"]), "G2", "delinquency"),
         _m("1bii", "1bii.QoQ Deterioration in 30+DPD$% in Prior Month",
            v_dpd_qoq_prior,
-           lambda v, c: r_deterioration_pair(c), "G2", "delinquency"),
+           lambda v, c: r_deterioration_pair(c, DET_PAIR["Unsecured"]), "G2", "delinquency"),
         _m("1c", "1c. YoY Deterioration in 30+ DPD$%", v_dpd_yoy,
-           lambda v, c: r_deterioration(v), "G2", "delinquency"),
+           lambda v, c: r_deterioration(v, DET_SINGLE["Unsecured"]), "G2", "delinquency"),
         _m("1d", "1d.Country 30+DPD% Total Group 30+ Delinquency",
            v_dpd_pct_of_total,
            lambda v, c: E.bands_desc(v, [(.10, "Very High"), (.075, "High"),
@@ -249,12 +273,12 @@ def sme_metrics() -> List[dict]:
                                          (None, "Very Low")]), "G1", "1a"),
         _m("1bi", "1bi.QoQ Deterioration in 30+DPD$% in Current Month",
            v_dpd_qoq_current,
-           lambda v, c: r_deterioration_pair(c), "G2", "delinquency"),
+           lambda v, c: r_deterioration_pair(c, DET_PAIR["SME Banking"]), "G2", "delinquency"),
         _m("1bii", "1bii.QoQ Deterioration in 30+DPD$% in Prior Month",
            v_dpd_qoq_prior,
-           lambda v, c: r_deterioration_pair(c), "G2", "delinquency"),
+           lambda v, c: r_deterioration_pair(c, DET_PAIR["SME Banking"]), "G2", "delinquency"),
         _m("1c", "1c. YoY Deterioration in 30+ DPD$%", v_dpd_yoy,
-           lambda v, c: r_deterioration(v), "G2", "delinquency"),
+           lambda v, c: r_deterioration(v, DET_SINGLE["SME Banking"]), "G2", "delinquency"),
         _m("1d", "1d.Country 30+DPD% Total Group 30+ Delinquency",
            v_dpd_pct_of_total,
            lambda v, c: E.bands_desc(v, [(.20, "Very High"), (.15, "High"),
@@ -298,21 +322,33 @@ def wealth_metrics(kind: str = "total") -> List[dict]:
     is_pvb = (kind == "pvb")
     is_retail = (kind == "retail")
 
-    def ea_band(v, c):
+    def ea_band(v, c):   # 1d EA:  >1% VH / >0.75% H / >0.5% M / >0.25% L / else VL
+        return E.bands_desc(v, [(.01, "Very High"), (.0075, "High"),
+                                (.005, "Medium"), (.0025, "Low"), (None, "Very Low")])
+
+    def awc_band(v, c):  # 1e AWC: >3.5% VH / >2.5% H / >1.5% M / >0.5% L / else VL
         return E.bands_desc(v, [(.035, "Very High"), (.025, "High"),
                                 (.015, "Medium"), (.005, "Low"), (None, "Very Low")])
 
-    # 1bi/1bii/1c: blank for PvB, else as before
+    # 1bi/1bii/1c: blank for PvB, else Wealth deterioration ladders
     dpd_cur_v = v_blank if is_pvb else v_dpd_qoq_current
     dpd_pri_v = v_blank if is_pvb else v_dpd_qoq_prior
     dpd_yoy_v = v_blank if is_pvb else v_dpd_yoy
-    dpd_pair_r = r_blank if is_pvb else (lambda v, c: r_deterioration_pair(c))
-    dpd_yoy_r = r_blank if is_pvb else r_deterioration
+    dpd_pair_r = r_blank if is_pvb else (lambda v, c: r_deterioration_pair(c, DET_PAIR["Wealth"]))
+    dpd_yoy_r = r_blank if is_pvb else (lambda v, c: r_deterioration(v, DET_SINGLE["Wealth"]))
 
-    # 1d/1e EA & AWC: blank for Retail, else computed
+    # 1d/1e EA & AWC: blank for Retail, else computed (separate ladders)
     ea_v = v_blank if is_retail else v_ea_proportion
     awc_v = v_blank if is_retail else v_awc_proportion
     ea_r = r_blank if is_retail else ea_band
+    awc_r = r_blank if is_retail else awc_band
+
+    # 1f Shortfall: real value for total & PvB (blank for Retail)
+    def shortfall_band(v, c):   # >25% VH / >10% H / >5% M / >3% L / else VL
+        return E.bands_desc(v, [(.25, "Very High"), (.10, "High"),
+                                (.05, "Medium"), (.03, "Low"), (None, "Very Low")])
+    sf_v = v_blank if is_retail else v_shortfall
+    sf_r = r_blank if is_retail else shortfall_band
 
     return [
         _m("1a", "1a.Asset Growth Year on Year as %", v_asset_growth_yoy,
@@ -328,16 +364,19 @@ def wealth_metrics(kind: str = "total") -> List[dict]:
         _m("1d", "1d. Proportion of Exposure in Early Alert (EA)",
            ea_v, ea_r, "G3", "exposure"),
         _m("1e", "1e. Proportion of Exposure in Collection (AWC)",
-           awc_v, ea_r, "G3", "exposure"),
+           awc_v, awc_r, "G3", "exposure"),
         _m("1f", "1f. Proportion of Exposure in Shortfall Status",
-           v_blank, r_blank, "G3", "exposure"),
+           sf_v, sf_r, "G3", "exposure"),
         _m("1g", "1g. Last 12 Months Policy Exceptions rate",
            v_policy_exception_rate,
-           lambda v, c: E.bands_desc(v, [(.075, "Very High"), (.05, "High"),
-                                         (.03, "Medium"), (.01, "Low"),
+           lambda v, c: E.bands_desc(v, [(.035, "Very High"), (.025, "High"),
+                                         (.015, "Medium"), (.005, "Low"),
                                          (None, "Very Low")]), "G4", "policy_disp"),
         _m("1h", "1h.Active Dispensations on Wealth Lending",
            v_active_dispensations, lambda v, c: _disp_rating(v), "G4", "policy_disp"),
+        _m("1i", "1i.Credit Risk Appetite breaches in last 12 months",
+           v_cra_breaches, lambda v, c: _breach_rating(v), "G5", "breaches"),
+    ] + [
         _m("2a", "2a.Country Risk - Outlook", v_country_outlook, r_outlook,
            "G6", "macro"),
         _m("2b", "2b.Country Risk - Grading", v_country_grading, r_grading,
@@ -417,20 +456,69 @@ def _wealth_pair(ctx):
 # to instead divide by the actual group count per category (so every category
 # sums to 100%).
 W6 = 1.0 / 6.0
-NORMALISE_WEIGHTS = False
+W5 = 0.2
+NORMALISE_WEIGHTS = True   # (kept for the fallback path; explicit THEME_WEIGHTS win)
+
+# Per-theme weight for the Calculated Inherent score, one weight per AGG_GROUPS
+# theme, in order.  Secured & Unsecured: six themes x 1/6 (16.7%).  The other
+# four products: five themes x 0.2 (20%) - EXCEPT SME Banking's (1g,1h) theme,
+# which is 1/6 per the definitive formula.
+THEME_WEIGHTS = {
+    "Secured":                          [W6, W6, W6, W6, W6, W6],
+    "Unsecured":                        [W6, W6, W6, W6, W6, W6],
+    "SME Banking":                      [W5, W5, W5, W5, W5],
+    "Wealth Lending":                   [W5, W5, W5, W5, W5],
+    "Wealth Lending - Retail Banking":  [W5, W5, W5, W5, W5],
+    "Wealth Lending - PvB":             [W5, W5, W5, W5, W5],
+}
+
+
+def theme_weights(product):
+    """Per-theme inherent weights for a product (one per AGG_GROUPS theme).
+    Falls back to a uniform 1/#themes when no explicit vector is defined."""
+    g = AGG_GROUPS.get(product, [])
+    tw = THEME_WEIGHTS.get(product)
+    if tw and len(tw) == len(g):
+        return list(tw)
+    return [1.0 / len(g)] * len(g) if g else []
+
+
+# Decimal places used for BOTH the displayed Calculated Inherent score and the
+# band it maps to.  The two must use the same rounded value, or a score that
+# shows as e.g. 3.5 can rate one band lower.
+SCORE_DP = 4
+
+def inherent_band(score):
+    """Map a Calculated Inherent score to its rating band, rounding to SCORE_DP
+    first so the band always agrees with the value shown in the output.
+
+    Inherent scores are sums of (theme max x theme weight); with 1/6 or 1/5
+    weights a true 3.5 (= 21/6) comes back from floating point as
+    3.4999999999999996, which a raw '>= 3.5' test would rate Medium even though
+    the cell displays 3.5.  Rounding to SCORE_DP removes that artefact without
+    reclassifying any genuine value (the nearest real scores to a boundary are a
+    sixth/fifth away, far outside rounding range).  Blank/None -> ''."""
+    if score is None or score == "":
+        return ""
+    s = round(float(score), SCORE_DP)
+    if s >= 4.5: return "Very High"
+    if s >= 3.5: return "High"
+    if s >= 2.5: return "Medium"
+    if s >= 1.5: return "Low"
+    return "Very Low"
 
 AGG_GROUPS: Dict[str, List[List[int]]] = {
     # Secured (13 labels)
-    "Secured": [[1], [2, 3, 4, 5], [6, 7, 8], [9], [10], [11, 12, 13]],
+    "Secured": [[1], [2, 3, 4, 5], [6, 7], [8], [9], [10, 11, 12, 13]],
     # Unsecured (11 labels)
     "Unsecured": [[1], [2, 3, 4, 5], [6, 7], [8], [9], [10, 11]],
     # SME Banking (12 labels)
     "SME Banking": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10], [11, 12]],
-    # Wealth Lending family (11 labels each): 1a | dpd+EA+AWC+shortfall |
-    # policy+dispensations | outlook+grading.  Blank labels contribute nothing.
-    "Wealth Lending": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10, 11]],
-    "Wealth Lending - Retail Banking": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10, 11]],
-    "Wealth Lending - PvB": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10, 11]],
+    # Wealth Lending total (12 labels): 1a | dpd+EA+AWC+shortfall | policy+disp
+    #   | breaches(1i) | outlook+grading.  Retail/PvB keep 11 labels (no 1i).
+    "Wealth Lending": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10], [11, 12]],
+    "Wealth Lending - Retail Banking": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10], [11, 12]],
+    "Wealth Lending - PvB": [[1], [2, 3, 4, 5, 6, 7], [8, 9], [10], [11, 12]],
 }
 
 METRICS: Dict[str, Callable[[], List[dict]]] = {
@@ -443,3 +531,15 @@ METRICS: Dict[str, Callable[[], List[dict]]] = {
 }
 
 FINAL_LABEL = "Calculated Inherent Credit Risk Assessment:"
+
+# (product, canonical label-id) pairs that are hard-coded "Not Applicable"
+# everywhere - per country and at GROUP - regardless of the underlying data.
+# The label shows "Not Applicable" (no risk number) and drops out of the
+# Calculated Inherent (its theme contributes nothing).  PvB 1bi/1bii/1c are
+# already Not Applicable per country; this makes the GROUP row match.
+NOT_APPLICABLE = {
+    ("Wealth Lending - Retail Banking", "1i"),
+    ("Wealth Lending - PvB", "1bi"),
+    ("Wealth Lending - PvB", "1bii"),
+    ("Wealth Lending - PvB", "1c"),
+}

@@ -117,6 +117,8 @@ def main():
             if "Outlook" not in label and "Grading" not in label:
                 continue
             country = r["Country"]
+            if str(country) == "GROUP":     # GROUP roll-up rows have no sovereign text
+                continue
             got = r["Value"]
             exp_rec = expected.get(_ckey(country))
             field = "outlook" if "Outlook" in label else "grading"

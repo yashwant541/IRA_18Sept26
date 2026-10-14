@@ -90,7 +90,13 @@ def _write_sheets(path, frames: dict, first=None):
         for title, df in order:
             name = E.sanitize_sheet_name(title, used)
             safe.append(name)
-            (df if not df.empty else pd.DataFrame({"(empty)": []})).to_excel(
+            out = df
+            if isinstance(title, str) and title.startswith("IRA - ") and not df.empty:
+                try:
+                    out = B.attach_rating_formula(df, title.replace("IRA - ", "", 1))
+                except Exception:
+                    out = df
+            (out if not out.empty else pd.DataFrame({"(empty)": []})).to_excel(
                 xw, sheet_name=name, index=False)
     _format(path, safe)
 
@@ -98,6 +104,10 @@ def _write_sheets(path, frames: dict, first=None):
 def _format(path, sheet_names):
     wb = load_workbook(path)
     for ws in wb.worksheets:
+        try:
+            B.textify_formula_column(ws)   # show formula as text, not #NAME?
+        except Exception:
+            pass
         headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
         for c in range(1, ws.max_column + 1):
             ws.cell(1, c).fill = HFILL
@@ -106,7 +116,7 @@ def _format(path, sheet_names):
             w = 22
             h = str(headers[c-1] or "")
             if h in ("Label", "Calculation", "Source table(s)", "Reason",
-                     "What to do in Value Column", "Intermediate table"):
+                     "What to do in Value Column", "Intermediate table", "Risk Rating Formula"):
                 w = 40
             elif h in ("Country", "Product", "Category", "Metric"):
                 w = 16
@@ -218,6 +228,18 @@ def main():
         print(f"      {name:22} {len(df):>3} rows, {n} Not Available")
     _write_sheets(out, frames)
     print(f"[4] {out}   (total Not-Available cells: {na})")
+
+    # input-data long dump: Period | Type | Country | Segment | Value | Month
+    try:
+        from IRA import ira_inputs as IN, ira_engine as E
+    except ImportError:
+        import ira_inputs as IN, ira_engine as E
+    enr = tables.get("ENR")
+    period = E.fmt_month(enr.months[-1]) if getattr(enr, "months", None) else ""
+    in_df = IN.input_dataframe(tables, period)
+    in_path = os.path.join(os.path.dirname(os.path.abspath(out)) or ".", "IRA_Input_Data.xlsx")
+    in_df.to_excel(in_path, sheet_name="Input Data", index=False)
+    print(f"[5] {in_path}   ({len(in_df)} input rows across {in_df['Type'].nunique()} tables)")
 
     # NA reasons summary
     print("\nNot-Available reasons:")
