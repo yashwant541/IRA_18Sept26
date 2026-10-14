@@ -141,8 +141,7 @@ def _dpd_delta(tbl, country, prod_in, base_back, period, ref_label):
 
 def _pct_of_total(tbl, country, prod_in, scope_countries):
     """1d: this country's product $ (current month) / sum of the SAME product
-    across ALL countries carrying it in the table that month (the full 'group
-    total', not just the in-scope countries)."""
+    across the in-scope countries that month."""
     s, why = _series(tbl, country, prod_in)
     if s is None:
         return None, why, {}
@@ -152,23 +151,15 @@ def _pct_of_total(tbl, country, prod_in, scope_countries):
                      "(check its header row of dates)", {}
     last = m[-1]
     cur = _at(s, m, 0)
-    _EXCL = {"total", "group", "others", "other", "grand total"}
     total = 0.0
     found = False
-    for (c, p), series in getattr(tbl, "product_data", {}).items():
-        if p != prod_in or str(c).strip().lower() in _EXCL:
-            continue
-        v = series.get(last)
-        if v is None:
-            continue
-        try:
-            total += float(v)
+    for c in scope_countries:
+        cs = tbl.series_pp(c, prod_in)
+        if cs is not None and cs.get(last) is not None:
+            total += cs.get(last)
             found = True
-        except (TypeError, ValueError):
-            pass
     comp = {"product_current": cur,
             "product_total_across_countries": (round(total, 6) if found else None),
-            "denominator_scope": "all countries in table",
             "month": E.fmt_month(last)}
     if cur is None:
         return None, "current-month value missing", comp
@@ -183,7 +174,7 @@ def _pct_of_total(tbl, country, prod_in, scope_countries):
 # output-format class per intermediate key (drives % vs count vs text display)
 PCT_KEYS = {"enr_yoy", "dpd_qoq_cur", "dpd_qoq_prior", "dpd_yoy",
             "dpd_pct_total", "policy_exc_rate", "ea_prop", "awc_prop",
-            "ltv", "volatile", "ppi_yoy", "interest_inc", "shortfall"}
+            "ltv", "volatile", "ppi_yoy", "interest_inc"}
 COUNT_KEYS = {"dispensations", "breaches"}
 TEXT_KEYS = {"sovereign_outlook", "sovereign_grade"}
 
@@ -262,12 +253,8 @@ def build(tables: Dict[str, Any], countries_per_category) -> Dict[str, Dict[Tupl
         amt_tbl = tables.get(_dpd_amt_key(po))     # 90+$ / 30+$ for 1d
 
         for country in scope:
-            # 1a  ENR asset growth YoY.  SME Banking adds the ME ENR line onto
-            # the SME Banking ENR (for countries that have ME) - 1a only.
-            if po == "SME Banking":
-                v, why, comp = _yoy_sum(tables.get("ENR"), country, ["SME Banking", "ME"])
-            else:
-                v, why, comp = _yoy(tables.get("ENR"), country, pin)
+            # 1a  ENR asset growth YoY
+            v, why, comp = _yoy(tables.get("ENR"), country, pin)
             put("enr_yoy", country, po, v, why or "", comp)
 
             # 1bi / 1bii  QoQ deterioration = current - 3 months back.
@@ -293,11 +280,10 @@ def build(tables: Dict[str, Any], countries_per_category) -> Dict[str, Dict[Tupl
             v, why, comp = _policy_exc(tables, country, pin)
             put("policy_exc_rate", country, po, v, why, comp)
 
-            # EA / AWC proportions (SME uses the ENR 'ME' product as denominator)
-            enr_ea = "ME" if po == "SME Banking" else pin
-            v, why, comp = _ratio_of_enr(tables, country, enr_ea, kind="EA")
+            # EA / AWC proportions
+            v, why, comp = _ratio_of_enr(tables, country, pin, kind="EA")
             put("ea_prop", country, po, v, why, comp)
-            v, why, comp = _ratio_of_enr(tables, country, enr_ea, kind="AWC")
+            v, why, comp = _ratio_of_enr(tables, country, pin, kind="AWC")
             put("awc_prop", country, po, v, why, comp)
 
             # dispensations / breaches (per category)
@@ -345,46 +331,26 @@ def _build_wealth_family(tables, countries_per_category, put):
             v, why, comp = _dpd_delta(dpd_pct, country, WL_RETAIL_CANON, 0, 12, "Last Year")
             put("dpd_yoy", country, prod, v, why, comp)
 
-        # ---- 1d/1e EA & AWC: total via ME table over PvB ENR; PvB via PvB table
-        v, why, comp = _ratio_pvb(tables, country, kind="EA")
+        # ---- 1d/1e EA & AWC: total via ME table; PvB via PvB table --------- #
+        v, why, comp = _ratio_of_enr(tables, country, WL_RETAIL_CANON, kind="EA")
         put("ea_prop", country, WL_TOTAL, v, why, comp)
-
-        v, why, comp = _ratio_pvb(tables, country, kind="AWC")
+        v, why, comp = _ratio_of_enr(tables, country, WL_RETAIL_CANON, kind="AWC")
         put("awc_prop", country, WL_TOTAL, v, why, comp)
-
         v, why, comp = _ratio_pvb(tables, country, kind="EA")
         put("ea_prop", country, WL_PVB, v, why, comp)
-
         v, why, comp = _ratio_pvb(tables, country, kind="AWC")
         put("awc_prop", country, WL_PVB, v, why, comp)
         # Retail EA/AWC intentionally blank (config uses v_blank)
-
-        # ---- 1f Shortfall: Private-Banking shortfall / Wealth Banking ENR --- #
-        v, why, comp = _shortfall(tables, country)
-        put("shortfall", country, WL_TOTAL, v, why, comp)
-        put("shortfall", country, WL_PVB, v, why, comp)
-        # Retail shortfall intentionally blank (config uses v_blank)
 
         # ---- 1g policy exceptions: same for all three (Wealth Banking) ----- #
         v, why, comp = _policy_exc(tables, country, WL_RETAIL_CANON)
         for prod in WL_PRODUCTS:
             put("policy_exc_rate", country, prod, v, why, comp)
 
-        # ---- 1h dispensations: individual table per Wealth product -------- #
-        #   WL -> Wealth Lending, WL_Retail -> Retail Banking, WL_PvB -> PvB.
-        #   Falls back to the shared Wealth Lending table if a sub-table is absent.
+        # ---- 1h dispensations: same for all three (Wealth Lending table) --- #
+        v, why = _dispensations(tables, country, "Wealth Lending")
         for prod in WL_PRODUCTS:
-            v, why = _dispensations(tables, country, prod)
-            if v is None and prod != WL_TOTAL:
-                v2, why2 = _dispensations(tables, country, WL_TOTAL)
-                if v2 is not None:
-                    v, why = v2, (why2 + "  [fallback: shared Wealth Lending table]")
             put("dispensations", country, prod, v, why, {})
-
-        # ---- 1i CRA breaches: all three Wealth products (ENR-weighted GROUP) --
-        v, why = _breaches(tables, country, "Wealth Lending")
-        for prod in WL_PRODUCTS:
-            put("breaches", country, prod, v, why, {})
 
 
 # --------------------------------------------------------------------------- #
@@ -428,35 +394,22 @@ def _policy_exc(tables, country, prod_in):
 
 def _ratio_of_enr(tables, country, prod_in, kind="EA"):
     me = tables.get("ME_EA_AWC") or {}
-
     if kind == "EA":
         tbl = me.get("ME EA (PP & NPP) in $mn") or me.get("ME EA NPP in $mn")
     else:
         tbl = me.get("ME AWC in $mn")
-
     if tbl is None:
         return None, f"{kind} table not found in ME EA AWC", {}
-
     num = E.latest(tbl.series_c(country), tbl.months)
-
     enr = tables.get("ENR")
-    den = E.latest(
-        enr.series_pp(country, prod_in),
-        enr.months
-    ) if enr else None
-
-    comp = {
-        kind: num,
-        "ENR": den
-    }
-
+    den = E.latest(enr.series_pp(country, prod_in), enr.months) if enr else None
+    comp = {kind: num, "ENR": den}
     if num is None:
         return None, f"{country} not in {kind} table", comp
-
     if den in (None, 0):
         return None, "ENR denominator missing/zero", comp
-
     return num / den, "", comp
+
 
 # ---- Wealth Lending family helpers (ENR sum, PvB EA/AWC) ------------------- #
 def _sum_series(tbl, country, prods):
@@ -523,98 +476,18 @@ def _ratio_pvb(tables, country, kind="EA"):
     tbl = ea_tbl if kind == "EA" else awc_tbl
     if tbl is None:
         return None, f"PvB {kind} table not found", {}
-    ea_s = tbl.series_c(country)
+    num = E.latest(tbl.series_c(country), tbl.months)
     enr = tables.get("ENR")
-    enr_s = enr.series_pp(country, WL_PVB_CANON) if enr else None
-    if ea_s is None:
-        return None, f"{country} not in PvB {kind} table", {}
-    if enr_s is None:
-        return None, "PvB ENR series missing", {}
-    m = tbl.months
-
-    if not m:
-        return None, "no month columns found", {}
-
-    m_cur = m[-1]
-
-    num = ea_s.get(m_cur)
-    den = enr_s.get(m_cur)
-
-    comp = {
-        f"{kind} {E.fmt_month(m_cur)}": num,
-        f"PvB ENR {E.fmt_month(m_cur)}": den,
-        "basis": f"Current {kind} / Current PvB ENR"
-    }
-
+    den = E.latest(enr.series_pp(country, WL_PVB_CANON), enr.months) if enr else None
+    comp = {kind: num, "PvB ENR": den}
     if num is None:
         return None, f"{country} not in PvB {kind} table", comp
-
     if den in (None, 0):
         return None, "PvB ENR denominator missing/zero", comp
-
     return num / den, "", comp
 
 
-def _shortfall(tables, country):
-    """Wealth Lending Private-Banking shortfall proportion:
-       (securities Total-amount + real-estate Total-amount for the country) / 1000
-       divided by the country's ENR 'Wealth Banking'.  A fraction (x100 = %)."""
-    wm = tables.get("wm_shortfall") or {}
-    if not wm:
-        return None, "WM_Shortfall table missing", {}
-
-    def amt(tbl):
-        d = wm.get(tbl) or {}
-        if country in d:
-            return d[country]
-        ck = E.country_key(country)
-        for k, v in d.items():
-            if k != "__total__" and E.country_key(k) == ck:
-                return v
-        return None
-
-    sec, re_ = amt("securities"), amt("real_estate")
-    if sec is None and re_ is None:
-        return None, f"{country} not in WM_Shortfall PB tables", {}
-    total = (sec or 0) + (re_ or 0)
-    enr = tables.get("ENR")
-    den = E.latest(enr.series_pp(country, "PvB"), enr.months) if enr else None
-    comp = {"securities": sec, "real_estate": re_, "sum_usd000": total,
-            "ENR Private Banking (PvB)": den}
-    if den in (None, 0):
-        return None, "Private Banking (PvB) ENR missing/zero", comp
-    return (total / 1000.0) / den, "", comp
-
-
-def _shortfall_group(tables):
-    """GROUP shortfall: (securities '__total__' + real-estate '__total__') / 1000
-       divided by the total ENR 'PvB' (Private Banking) over all countries."""
-    wm = tables.get("wm_shortfall") or {}
-    sec = (wm.get("securities") or {}).get("__total__")
-    re_ = (wm.get("real_estate") or {}).get("__total__")
-    if sec is None and re_ is None:
-        return None
-    total = (sec or 0) + (re_ or 0)
-    enr = tables.get("ENR")
-    if enr is None:
-        return None
-    m = enr.months[-1] if enr.months else None
-    den = 0.0
-    for (c, p), s in enr.product_data.items():
-        if p == "PvB" and str(c).strip().lower() not in (
-                "total", "group", "others", "other") and s.get(m) is not None:
-            den += float(s[m])
-    if not den:
-        return None
-    return (total / 1000.0) / den
-
-
 def _ltv(tables, country):
-    """1g LTV>80 concentration - shown exactly as the input percentage, with no
-    calculation applied to it.  Excel percentage cells arrive as fractions
-    (0.4805 -> displayed 48.05%); if a source instead stores a bare percent
-    number (48.05), it is normalised to the same fraction so the output always
-    equals the input percentage rather than 100x it."""
     tbl = tables.get("LTV80")
     if tbl is None:
         return None, "LTV>80 table missing", {}
@@ -622,41 +495,21 @@ def _ltv(tables, country):
     v = E.latest(s, tbl.months) if s else None
     if v is None:
         return None, f"{country} not in LTV table (and no Group row)", {}
-    try:
-        v = float(v)
-    except (TypeError, ValueError):
-        return None, f"LTV value for {country} is not numeric", {"ltv_raw": v}
-    frac = (v / 100.0) if abs(v) > 1 else v      # percent-number -> fraction; fraction kept as-is
-    return frac, "", {"ltv_raw": v, "shown_as": f"{frac * 100:.2f}%"}
-
-
-# CCPL Volatile sheet keys countries by a 2/3-letter code (Global = portfolio).
-CCPL_CODE = {
-    "Korea SCBK": "KR", "Korea": "KR", "Hong Kong": "HK", "Taiwan": "TW",
-    "China": "CH", "Singapore": "SG", "Malaysia": "MY", "Indonesia": "ID",
-    "India": "IN", "UAE": "UAE", "Botswana": "BW", "Ghana": "GH",
-    "Kenya": "KE", "Uganda": "UG", "Zambia": "ZM", "Bahrain": "BH",
-    "Vietnam": "VN", "Bangladesh": "BD",
-}
+    return v / 100.0, "", {"ltv_raw": v, "basis": "value/100"}
 
 
 def _volatile(tables, country):
     vol = tables.get("ccpl_volatile") or {}
     if not vol:
         return None, "CCPL Volatile table missing", {}
-    hit = _lookup(vol, country)              # direct name/alias match
+    hit = _lookup(vol, country)
     if hit is not None:
         return hit, "", {"matched": country}
-    code = CCPL_CODE.get(country)            # the 2/3-letter code used in the sheet
-    if not code:
-        ck = E.country_key(country)
-        for name, cd in CCPL_CODE.items():
-            if E.country_key(name) == ck:
-                code = cd
-                break
-    if code and code in vol:
-        return vol[code], "", {"matched_code": code}
-    # Global is the portfolio value - reserved for the GROUP row, not a country
+    for key in (E.COUNTRY_CCY.get(country, ""), country[:2].upper()):
+        if key in vol:
+            return vol[key], "", {"matched_code": key}
+    if "Global" in vol:
+        return vol["Global"], "no country code match; used Global", {}
     return None, f"no CCPL code for {country}", {}
 
 
@@ -680,10 +533,7 @@ def _ppi_yoy(tables, country):
 
 
 def _interest_inc(tables, country):
-    """2a: (current-month rate - last-3-years average) / 100.
-    The 3-year window is anchored on the latest month's DATE (not a blind
-    36-row slice): it includes every month whose date falls within the 3 years
-    up to and including the latest month, so gaps or extra history can't skew it."""
+    """2a: (current-month rate - last-3-years average) / 100, per the mapping."""
     ir = tables.get("interest_rates")
     if ir is None:
         return None, "Interest Rates table missing/empty", {}
@@ -691,22 +541,7 @@ def _interest_inc(tables, country):
     if not s:
         return None, f"no interest-rate column for {country}", {}
     months = ir.months
-    import pandas as pd
-
-    def _d(m):
-        try:
-            return pd.to_datetime(m)
-        except Exception:
-            return None
-
-    last_d = _d(months[-1]) if months else None
-    if last_d is not None:
-        cutoff = last_d - pd.DateOffset(years=3)        # 3 years before the latest month
-        win = [m for m in months if (_d(m) is not None and _d(m) > cutoff)]
-        if not win:
-            win = months[-36:] if len(months) >= 36 else months
-    else:                                               # non-date labels: safe fallback
-        win = months[-36:] if len(months) >= 36 else months
+    win = months[-36:] if len(months) >= 36 else months     # last 3 years
     vals = [s.get(m) for m in win if s.get(m) is not None]
     if not vals:
         return None, "interest-rate column has no values", {}
@@ -716,9 +551,7 @@ def _interest_inc(tables, country):
         return None, "current-month interest rate missing", {"avg_3yr": round(avg, 6)}
     return (last - avg) / 100.0, "", {"current": round(last, 4),
                                       "avg_3yr": round(avg, 4),
-                                      "window_start": str(win[0]) if win else None,
-                                      "window_months": len(win),
-                                      "basis": "(current - last-3-years avg)/100"}
+                                      "basis": "(current - 3yr avg)/100"}
 
 
 def _sovereign(tables, country):
@@ -788,10 +621,10 @@ INT_SOURCE = {
     "dpd_pct_total": ("90+$ / 30+$", "product current / group total current"),
     "policy_exc_rate": ("# policy exception L2&L3  /  # monthly new approved",
                         "sum(L2+L3, 12m) / sum(new approved, 12m)"),
-    "ea_prop": ("ME EA AWC (EA) + ENR", "EA(country) / ENR denom; SME uses ENR 'ME', Wealth uses ENR 'PvB'"),
-    "awc_prop": ("ME EA AWC (AWC) + ENR", "AWC(country) / ENR denom; SME uses ENR 'ME', Wealth uses ENR 'PvB'"),
-    "ltv": ("LTV > 80 Excl MIP", "country value shown as the input %"),
-    "volatile": ("CCPL Volatile by Country", "country reads its own 2/3-letter code; Global is GROUP-only"),
+    "ea_prop": ("ME EA AWC (EA) + ENR", "EA(country) / ENR(product), current month"),
+    "awc_prop": ("ME EA AWC (AWC) + ENR", "AWC(country) / ENR(product), current month"),
+    "ltv": ("LTV > 80 Excl MIP", "country current value / 100"),
+    "volatile": ("CCPL Volatile by Country", "volatile % for the country code"),
     "ppi_yoy": ("Property Price Index (by country)", "YoY of PPI for the country"),
     "interest_inc": ("Interest Rates (3-yr history)", "(current - 3yr avg) / 100"),
     "sovereign_outlook": ("Country Sovereign Rating & Outlook", "Outlook value"),

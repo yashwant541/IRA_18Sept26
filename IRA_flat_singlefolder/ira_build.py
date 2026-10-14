@@ -72,16 +72,6 @@ def compute_country_product(tables: Dict[str, Any], country: str,
     result: Dict[str, Any] = {}
     for m in metric_defs:
         val = ctx[m["id"]]
-        if (product_out, m["id"]) in C.NOT_APPLICABLE:
-            # hard-coded Not Applicable: show the status, no risk number, and let
-            # it drop out of the Calculated Inherent (number None -> theme skipped).
-            result[m["id"]] = dict(label=m["label"], value=val,
-                                   display="Not Applicable", rating="Not Applicable",
-                                   number=None, group=m["group"],
-                                   weight_key=m["weight_key"],
-                                   int_key=getattr(m["value"], "int_key", ""),
-                                   reason="Not Applicable")
-            continue
         try:
             rating = m["rating"](val, ctx)
         except Exception:
@@ -106,22 +96,31 @@ def final_assessment(product_out: str, per_metric: Dict[str, Any],
     numbers = [per_metric[m["id"]]["number"] for m in metric_defs]
 
     groups = C.AGG_GROUPS.get(product_out, [])
-    weights = C.theme_weights(product_out)
+    weight = (1.0 / len(groups)) if (C.NORMALISE_WEIGHTS and groups) else C.W6
 
     score = 0.0
     contributions = []
-    for gi, positions in enumerate(groups):
+    for positions in groups:
         vals = [numbers[p - 1] for p in positions
                 if 1 <= p <= len(numbers) and numbers[p - 1] is not None]
         if not vals:
             contributions.append(None)
             continue
         agg = max(vals)
-        score += weights[gi] * agg
+        score += weight * agg
         contributions.append(agg)
 
-    rating = C.inherent_band(score)
-    return dict(score=round(score, C.SCORE_DP), rating=rating, contributions=contributions)
+    if score >= 4.5:
+        rating = "Very High"
+    elif score >= 3.5:
+        rating = "High"
+    elif score >= 2.5:
+        rating = "Medium"
+    elif score >= 1.5:
+        rating = "Low"
+    else:
+        rating = "Very Low"
+    return dict(score=round(score, 4), rating=rating, contributions=contributions)
 
 
 def _fmt_output(int_key: str, value) -> Any:
@@ -219,47 +218,19 @@ def build_all(tables: Dict[str, Any], countries: List[str] = None,
     Countries can be set globally (`countries`) or per category
     (`countries_per_category={'Secured':[...], ...}`); otherwise auto-detected."""
     per_cat = resolve_countries(tables, countries, countries_per_category)
+    _ensure_intermediates(tables, per_cat)
     wl = per_cat.get("Wealth Lending", [])
-    cpc = countries_per_category or {}
-    # PvB and Retail run over their OWN configured country sets when the config
-    # provides them; otherwise fall back (PvB -> Wealth Lending countries that
-    # actually have PvB data; Retail -> all Wealth Lending countries).
-    pb_cfg = cpc.get("Wealth Lending - Private Banking")
-    pvb = list(pb_cfg) if pb_cfg else [c for c in wl if I._pvb_available(tables, c)]
-    retail_cfg = cpc.get("Wealth Lending - Retail Banking")
-    retail = list(retail_cfg) if retail_cfg else wl
-    # Build intermediates over the UNION of the Wealth family so PvB/Retail-only
-    # countries (e.g. UK) get their Wealth-family AND sovereign intermediates
-    # built - each frame below still uses its own scope.
-    per_cat_inter = dict(per_cat)
-    per_cat_inter["Wealth Lending"] = list(dict.fromkeys(list(wl) + pvb + retail))
-    _ensure_intermediates(tables, per_cat_inter)
-    frames = {
+    pvb = [c for c in wl if I._pvb_available(tables, c)]     # PvB countries (list B)
+    return {
         "IRA - Secured":        build_product_frame(tables, "Secured", per_cat["Secured"]),
         "IRA - Unsecured":      build_product_frame(tables, "Unsecured", per_cat["Unsecured"]),
         "IRA - SME Banking":    build_product_frame(tables, "SME Banking", per_cat["SME Banking"]),
         "IRA - Wealth Lending": build_product_frame(tables, "Wealth Lending", wl),
         "IRA - Wealth Lending - Retail Banking":
-            build_product_frame(tables, "Wealth Lending - Retail Banking", retail),
+            build_product_frame(tables, "Wealth Lending - Retail Banking", wl),
         "IRA - Wealth Lending - PvB":
             build_product_frame(tables, "Wealth Lending - PvB", pvb),
     }
-    try:
-        from . import ira_group as G
-    except ImportError:
-        import ira_group as G
-    frames = G.append_all(frames, tables)
-    return _stamp_period(frames, tables)
-
-
-def _stamp_period(frames: Dict[str, pd.DataFrame], tables) -> Dict[str, pd.DataFrame]:
-    """Insert a 'Period' column (latest MI month header, e.g. 'Mar-26') as the
-    first column of every frame."""
-    period = E.period_label(tables)
-    for name, df in frames.items():
-        if df is not None and not df.empty and "Period" not in df.columns:
-            df.insert(0, "Period", period)
-    return frames
 
 
 def build_intermediate_frames(tables: Dict[str, Any],
@@ -279,7 +250,7 @@ def build_intermediate_frames(tables: Dict[str, Any],
     except ImportError:
         import ira_sovereign as SOV
     frames.update(SOV.intermediate_frames(tables.get("sovereign") or {}))
-    return _stamp_period(frames, tables)
+    return frames
 
 
 def build_mapping() -> pd.DataFrame:
@@ -310,190 +281,3 @@ def build_mapping() -> pd.DataFrame:
                 "Final-score group": f"G{gi}: {agg}" if gi else "",
             })
     return pd.DataFrame(rows)
-
-
-# --------------------------------------------------------------------------- #
-#  Risk Rating Formula documentation (download only - never shown in the app)
-# --------------------------------------------------------------------------- #
-import re as _re
-
-_GRADING = ('=IF(OR(B="11A",B="11B",B="11C",B="12A",B="12B",B="12C",B="13"),"Very High",'
-            'IF(OR(B="8B",B="9A",B="9B",B="10A"),"High",'
-            'IF(OR(B="5B",B="6A",B="6B",B="7A",B="7B",B="8A"),"Medium",'
-            'IF(OR(B="1A",B="1B",B="2A"),"Very Low","Low"))))')
-_OUTLOOK = '=IF(B="Positive","Very Low",IF(B="Stable","Low","Very High"))'
-_DISP = '=IF(B>3,"Very High",IF(B=3,"High",IF(B=2,"Medium",IF(B=1,"Low","Very Low"))))'
-_BREACH = '=IF(B>1,"Very High",IF(B=1,"High","Very Low"))'
-_CALC = ('=IF(Score>=4.5,"Very High",IF(Score>=3.5,"High",'
-         'IF(Score>=2.5,"Medium",IF(Score>=1.5,"Low","Very Low"))))')
-_BII = "No separate formula: the Prior-Month value is evaluated inside the 1bi formula."
-
-# per (product, canonical label id) -> the exact Risk Rating formula
-_RATING_FORMULAS = {
-    "Secured": {
-        "1a": '=IF(B>10%,"Very High",IF(B>5%,"High",IF(B>3%,"Medium",IF(B>1%,"Low","Very Low"))))',
-        "1bi": '=IF(AND(cur>0.05%,prior>0.05%),"Very High",IF(AND(cur>0.03%,prior>0.03%),"High",IF(AND(cur>0.02%,prior>0.02%),"Medium",IF(AND(cur>0.01%,prior>0.01%),"Low","Very Low"))))',
-        "1bii": _BII,
-        "1c": '=IF(B>0.1%,"Very High",IF(B>0.05%,"High",IF(B>0.03%,"Medium",IF(B>0.01%,"Low","Very Low"))))',
-        "1d": '=IF(B>25%,"Very High",IF(B>15%,"High",IF(B>5%,"Medium",IF(B>2.5%,"Low","Very Low"))))',
-        "1e": '=IF(B="","Not Available",IF(B>15%,"Very High",IF(B>10%,"High",IF(B>7.5%,"Medium",IF(B>5%,"Low","Very Low")))))',
-        "1f": _DISP,
-        "1g": '=IF(B>10%,"Very High",IF(B>5%,"High",IF(B>2.5%,"Medium",IF(B>1%,"Low","Very Low"))))',
-        "1h": _BREACH,
-        "2a": '=IF(B>3%,"Very High",IF(B>2%,"High",IF(B>1%,"Medium",IF(B>0%,"Low","Very Low"))))',
-        "2b": '=IF(B>5%,"Very Low",IF(B>0,"Low",IF(B>-5%,"Medium",IF(B>-15%,"High","Very High"))))',
-        "2c": _OUTLOOK, "2d": _GRADING,
-    },
-    "Unsecured": {
-        "1a": '=IF(B>15%,"Very High",IF(B>5%,"High",IF(B>3%,"Medium",IF(B>1%,"Low","Very Low"))))',
-        "1bi": '=IF(AND(cur>0.25%,prior>0.25%),"Very High",IF(AND(cur>0.06%,prior>0.06%),"High",IF(AND(cur>0.04%,prior>0.04%),"Medium",IF(AND(cur>0.01%,prior>0.01%),"Low","Very Low"))))',
-        "1bii": _BII,
-        "1c": '=IF(B>0.25%,"Very High",IF(B>0.2%,"High",IF(B>0.15%,"Medium",IF(B>0.1%,"Low","Very Low"))))',
-        "1d": '=IF(B>10%,"Very High",IF(B>7.5%,"High",IF(B>5%,"Medium",IF(B>2.5%,"Low","Very Low"))))',
-        "1e": '=IF(B="","Not Available",IF(B>5%,"Very High",IF(B>1%,"High",IF(B>0.5%,"Medium",IF(B>0.25%,"Low","Very Low")))))',
-        "1f": _DISP,
-        "1g": '=IF(B>12.5%,"Very High",IF(B>10%,"High",IF(B>7.5%,"Medium",IF(B>5%,"Low","Very Low"))))',
-        "1h": _BREACH, "2a": _OUTLOOK, "2b": _GRADING,
-    },
-    "SME Banking": {
-        "1a": '=IF(B>15%,"Very High",IF(B>5%,"High",IF(B>3%,"Medium",IF(B>1%,"Low","Very Low"))))',
-        "1bi": '=IF(AND(cur>0.25%,prior>0.25%),"Very High",IF(AND(cur>0.06%,prior>0.06%),"High",IF(AND(cur>0.04%,prior>0.04%),"Medium",IF(AND(cur>0.01%,prior>0.01%),"Low","Very Low"))))',
-        "1bii": _BII,
-        "1c": '=IF(B>0.25%,"Very High",IF(B>0.2%,"High",IF(B>0.15%,"Medium",IF(B>0.1%,"Low","Very Low"))))',
-        "1d": '=IF(B>20%,"Very High",IF(B>15%,"High",IF(B>10%,"Medium",IF(B>5%,"Low","Very Low"))))',
-        "1e": '=IF(B>10%,"Very High",IF(B>7.5%,"High",IF(B>5%,"Medium",IF(B>2.5%,"Low","Very Low"))))',
-        "1f": '=IF(B>12.5%,"Very High",IF(B>10%,"High",IF(B>7.5%,"Medium",IF(B>5%,"Low","Very Low"))))',
-        "1g": '=IF(B="","Not Available",IF(B>7.5%,"Very High",IF(B>5%,"High",IF(B>3%,"Medium",IF(B>1%,"Low","Very Low")))))',
-        "1h": _DISP, "1i": _BREACH, "2a": _OUTLOOK, "2b": _GRADING,
-    },
-    "Wealth Lending": {
-        "1a": '=IF(B>15%,"Very High",IF(B>5%,"High",IF(B>3%,"Medium",IF(B>1%,"Low","Very Low"))))',
-        "1bi": '=IF(AND(cur>0.25%,prior>0.25%),"Very High",IF(AND(cur>0%,prior>0%),"High","Very Low"))',
-        "1bii": _BII,
-        "1c": '=IF(B>0.25%,"Very High",IF(B>0%,"High","Very Low"))',
-        "1d": '=IF(B>1%,"Very High",IF(B>0.75%,"High",IF(B>0.5%,"Medium",IF(B>0.25%,"Low","Very Low"))))',
-        "1e": '=IF(B>3.5%,"Very High",IF(B>2.5%,"High",IF(B>1.5%,"Medium",IF(B>0.5%,"Low","Very Low"))))',
-        "1f": '=IF(B>25%,"Very High",IF(B>10%,"High",IF(B>5%,"Medium",IF(B>3%,"Low","Very Low"))))',
-        "1g": '=IF(B>3.5%,"Very High",IF(B>2.5%,"High",IF(B>1.5%,"Medium",IF(B>0.5%,"Low","Very Low"))))',
-        "1h": _DISP, "1i": _BREACH, "2a": _OUTLOOK, "2b": _GRADING,
-    },
-}
-# Retail & PvB share the Wealth Lending ladders
-_RATING_FORMULAS["Wealth Lending - Retail Banking"] = _RATING_FORMULAS["Wealth Lending"]
-_RATING_FORMULAS["Wealth Lending - PvB"] = _RATING_FORMULAS["Wealth Lending"]
-
-_FORMULA_COL = "Risk Rating Formula"
-_WL_FAM = {"Wealth Lending", "Wealth Lending - Retail Banking", "Wealth Lending - PvB"}
-_WL_GROUP_DET = ('=IF(AND(cur>0.25%,prior>0.25%),"Very High",IF(AND(cur>0.06%,prior>0.06%),"High",'
-                 'IF(AND(cur>0.04%,prior>0.04%),"Medium",IF(AND(cur>0.01%,prior>0.01%),"Low","Very Low"))))')
-
-# ---- GROUP-row rating formulas ------------------------------------------- #
-# At GROUP an ENR-weighted label is rated by banding its weighted-sum VALUE:
-_VALUE_BAND = ('=IF(B>=4.5,"Very High",IF(B>=3.5,"High",'
-               'IF(B>=2.5,"Medium",IF(B>=1.5,"Low","Very Low"))))')
-# GROUP-only table-op ladder overrides (mirror ira_group.GROUP_RATE_OVERRIDE):
-_GRP_EA  = '=IF(B>10%,"Very High",IF(B>7.5%,"High",IF(B>5%,"Medium",IF(B>2.5%,"Low","Very Low"))))'
-_GRP_AWC = '=IF(B>12.5%,"Very High",IF(B>10%,"High",IF(B>7.5%,"Medium",IF(B>5%,"Low","Very Low"))))'
-_GRP_POL = ('=IF(B="","Not Available",IF(B>=7.5%,"Very High",IF(B>=5%,"High",'
-            'IF(B>=3%,"Medium",IF(B>=1%,"Low","Very Low")))))')
-_GROUP_OVERRIDE_FORMULA = {
-    ("Wealth Lending", "1d"): _GRP_EA,
-    ("Wealth Lending - PvB", "1d"): _GRP_EA,
-    ("Wealth Lending", "1e"): _GRP_AWC,
-    ("Wealth Lending - PvB", "1e"): _GRP_AWC,
-    ("Wealth Lending", "1g"): _GRP_POL,
-    ("Wealth Lending - Retail Banking", "1g"): _GRP_POL,
-    ("Wealth Lending - PvB", "1g"): _GRP_POL,
-}
-
-
-def _canon_label(label) -> str:
-    m = _re.match(r"^\s*([0-9]+[a-z]*)", str(label))
-    return m.group(1) if m else ""
-
-
-def _ira_group():
-    try:
-        from . import ira_group as _G
-    except ImportError:
-        import ira_group as _G
-    return _G
-
-
-def _int_key_for(product: str, canon: str) -> str:
-    """int_key of (product, canon) - tells GROUP table-op labels from ENR-weighted."""
-    try:
-        for m in C.METRICS.get(product, lambda: [])():
-            if _canon_label(m["label"]) == canon:
-                ik = getattr(m.get("value"), "int_key", "") or ""
-                if not ik:
-                    _G = _ira_group()
-                    ik = _G.CANON_TO_DPD.get(canon, "")
-                return ik
-    except Exception:
-        pass
-    return ""
-
-
-def _group_formula(product: str, canon: str) -> str:
-    """Risk-rating formula for a GROUP row.  Not Applicable labels have none;
-    ENR-weighted labels band their weighted-sum value; table-op labels use their
-    ratio ladder (with GROUP overrides and the granular Wealth deterioration)."""
-    if (product, canon) in C.NOT_APPLICABLE:
-        return "Not Applicable"
-    ov = _GROUP_OVERRIDE_FORMULA.get((product, canon))
-    if ov:
-        return ov
-    _G = _ira_group()
-    tops = _G.TABLE_OP_KEYS.get(product, set(_G._DPD))
-    if _int_key_for(product, canon) in tops:               # table op
-        if product in _WL_FAM and canon in ("1bi", "1bii"):
-            return _WL_GROUP_DET                            # granular pair ladder
-        return _RATING_FORMULAS.get(product, {}).get(canon, "")
-    return _VALUE_BAND                                      # ENR-weighted -> band value
-
-
-def rating_formula_for(product: str, label, country="") -> str:
-    """The Risk Rating formula documented for one (product, label).  GROUP rows
-    use the GROUP rating logic (value banding / table-op ladder / override /
-    Not Applicable); per-country rows use the per-country ladder."""
-    if str(label).strip().lower().startswith("calculated"):
-        return _CALC
-    canon = _canon_label(label)
-    if str(country) == "GROUP":
-        return _group_formula(product, canon)
-    if (product, canon) in C.NOT_APPLICABLE:
-        return "Not Applicable"
-    return _RATING_FORMULAS.get(product, {}).get(canon, "")
-
-
-def textify_formula_column(ws) -> None:
-    """Force the 'Risk Rating Formula' column to TEXT on an openpyxl worksheet so
-    Excel shows the documented formula literally instead of evaluating it (which
-    would give #NAME? - B/cur/prior/Value/Score are documentation placeholders,
-    not real cell references). Call after writing, before saving."""
-    col = None
-    for c in range(1, ws.max_column + 1):
-        if str(ws.cell(1, c).value).strip() == _FORMULA_COL:
-            col = c
-            break
-    if not col:
-        return
-    for r in range(2, ws.max_row + 1):
-        cell = ws.cell(r, col)
-        if cell.value not in (None, ""):
-            cell.data_type = "s"
-
-
-def attach_rating_formula(df: "pd.DataFrame", product: str) -> "pd.DataFrame":
-    """Return a copy of an output frame with a 'Risk Rating Formula' column
-    appended LAST (documentation of the ladder used for each label). Download
-    only - never added to the frames the app renders."""
-    if df is None or df.empty or _FORMULA_COL in df.columns:
-        return df
-    out = df.copy()
-    lab_col = "Label" if "Label" in out.columns else out.columns[min(1, len(out.columns) - 1)]
-    ctry_col = "Country" if "Country" in out.columns else out.columns[0]
-    out[_FORMULA_COL] = [rating_formula_for(product, lb, ct)
-                         for lb, ct in zip(out[lab_col], out[ctry_col])]
-    return out

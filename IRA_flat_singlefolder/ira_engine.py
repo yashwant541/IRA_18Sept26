@@ -110,7 +110,6 @@ PRODUCT_CANON = {
     "wealth lending": "Wealth Banking",
     "wealth": "Wealth Banking",
     "pvb": "PvB",
-    "me": "ME",
     "private banking": "PvB",
     "private bank": "PvB",
     "other": "Other",
@@ -151,7 +150,6 @@ _COUNTRY_ALIASES = {
     "southkorea": "korea", "republicofkorea": "korea", "koreasouth": "korea",
     "unitedarabemirates": "uae", "usa": "unitedstates", "us": "unitedstates",
     "uk": "unitedkingdom", "greatbritain": "unitedkingdom",
-    "bruneidarussalam": "brunei",
 }
 # org suffixes that should be stripped from a country label (e.g. "Korea SCBK")
 _COUNTRY_SUFFIXES = ("scbk", "sc", "plc", "ltd", "bank")
@@ -660,31 +658,6 @@ def qoq_pct(series, months, base_from_end=0, period=3):
 
 def latest(series, months, base_from_end=0):
     return _get(series, months, base_from_end)
-
-
-# The "Period" for a run = the latest month column header in the MI data.
-_PERIOD_TABLE_PREF = ("ENR", "90+%", "30+%", "90+$", "30+$", "RWA", "gco")
-
-
-def latest_month_header(tables):
-    """Return the raw latest month key from the first available monthly table."""
-    for key in _PERIOD_TABLE_PREF:
-        mt = tables.get(key)
-        months = getattr(mt, "months", None)
-        if months:
-            return months[-1]
-    # fall back to any MonthTable present
-    for v in tables.values():
-        months = getattr(v, "months", None)
-        if months:
-            return months[-1]
-    return None
-
-
-def period_label(tables):
-    """Formatted Period string (e.g. 'Mar-26') from the latest MI month header."""
-    m = latest_month_header(tables)
-    return fmt_month(m) if m is not None else ""
 
 
 # ----------------------------------------------------------------------------- #

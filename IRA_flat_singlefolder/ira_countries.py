@@ -70,16 +70,10 @@ def universe(tables: Dict[str, Any]) -> List[str]:
 
 
 def load(path: str) -> Dict[str, List[str]]:
-    """Read the include-list CSV -> {category: [countries]}.  {} if missing/empty.
-
-    In addition to the four base categories, the Wealth sub-products
-    'Wealth Lending - Private Banking' and 'Wealth Lending - Retail Banking'
-    are captured when present, so PvB / Retail run over their own configured
-    country sets (not a data-availability guess)."""
+    """Read the include-list CSV -> {category: [countries]}.  {} if missing/empty."""
     if not path or not os.path.exists(path):
         return {}
-    WL_SUB = ["Wealth Lending - Private Banking", "Wealth Lending - Retail Banking"]
-    out: Dict[str, List[str]] = {c: [] for c in list(E.CATEGORIES) + WL_SUB}
+    out: Dict[str, List[str]] = {c: [] for c in E.CATEGORIES}
     with open(path, newline="", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
             cat = (row.get("Category") or "").strip()

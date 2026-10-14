@@ -80,21 +80,14 @@ def rating_for_outlook(value) -> str:
 def rating_for_grading(value) -> str:
     if value is None or str(value).strip() == "":
         return "Not Available"
-    g = str(value).strip().upper().replace(" ", "")
-    # exact grade lists supplied by the business (2d / 2b)
-    VH = {"11A", "11B", "11C", "12A", "12B", "12C", "13"}
-    H = {"8B", "9A", "9B", "10A"}
-    M = {"5B", "6A", "6B", "7A", "7B", "8A"}
-    VL = {"1A", "1B", "2A"}
-    if g in VH:
-        return "Very High"
-    if g in H:
-        return "High"
-    if g in M:
-        return "Medium"
-    if g in VL:
-        return "Very Low"
-    return "Low"
+    m = re.match(r"\s*(\d+)", str(value))
+    if not m:
+        return "Not Available"
+    n = int(m.group(1))
+    for bound, rating in GRADE_BAND:
+        if n <= bound:
+            return rating
+    return "Very High"
 # =========================================================================== #
 
 

@@ -24,7 +24,6 @@ A leading blank column (data starting in column B) is handled.
 from __future__ import annotations
 from typing import Dict, List, Any, Tuple, Optional
 import pandas as pd
-import re
 
 try:
     from . import ira_engine as E
@@ -65,60 +64,6 @@ def _title_of(row: List[Any]) -> Optional[str]:
         return nb[0][1].strip()
     return None
 
-def _is_reference_title(value: Any) -> bool:
-    """
-    Return True only when the value is a recognized reference-table title.
-
-    A country row can contain only one populated text cell, so a generic
-    one-cell-text test is not sufficient to identify a table title.
-    """
-    if value is None:
-        return False
-
-    low = re.sub(
-        r"\s+",
-        " ",
-        str(value).replace("\xa0", " ").strip().lower()
-    )
-
-    if not low:
-        return False
-
-    # Dispensations
-    if (
-        "active or expired" in low
-        or "active/expired" in low
-        or "dispensation" in low
-    ):
-        return True
-
-    # CRA breaches
-    if (
-        "credit risk appetite breaches" in low
-        or ("appetite" in low and "breach" in low)
-    ):
-        return True
-
-    # Sovereign
-    if (
-        "sovereign" in low
-        or (
-            "outlook" in low
-            and ("crg" in low or "rating" in low)
-        )
-    ):
-        return True
-
-    # Property Price Index
-    if "property price index" in low or low == "ppi":
-        return True
-
-    # Interest rates
-    if low == "interest rates" or "interest rate" in low:
-        return True
-
-    return False
-
 
 def _category_from(title: str) -> Optional[str]:
     """Map a table title to a category by EXACT, case-insensitive word match.
@@ -136,50 +81,21 @@ def _category_from(title: str) -> Optional[str]:
         return "SME Banking"
     if words & {"wl", "wm", "wealth"}:
         return "Wealth Lending"
-    if words & {"pvb", "pb", "private"}:      # PvB block is the Wealth Lending category
-        return "Wealth Lending"
     return None
 
 
-def _block(
-    rows: List[List[Any]],
-    start: int
-) -> Tuple[List[List[Any]], int]:
-    """
-    Extract rows belonging to the current reference table.
-
-    Stop at:
-      1. a fully blank row, or
-      2. the next recognized reference-table title.
-
-    Important:
-    A row containing only a country name is not a table title. This occurs
-    frequently in CRA breach tables where that country has no breaches.
-    """
-    out: List[List[Any]] = []
+def _block(rows: List[List[Any]], start: int) -> Tuple[List[List[Any]], int]:
+    """Consecutive non-blank rows from `start` until a fully-blank row/new title."""
+    out = []
     i = start
-
     while i < len(rows):
-        row = rows[i]
-
-        # A genuinely blank row terminates the current table.
-        if all(_blank(cell) for cell in row):
+        r = rows[i]
+        if all(_blank(c) for c in r):
             break
-
-        candidate_title = _title_of(row)
-
-        # Only a recognized reference-table title starts the next block.
-        # Do not stop on one-cell country rows such as ["Bahrain", None, ...].
-        if (
-            out
-            and candidate_title is not None
-            and _is_reference_title(candidate_title)
-        ):
+        if out and _title_of(r):     # a new title starts the next block
             break
-
-        out.append(row)
+        out.append(r)
         i += 1
-
     return out, i
 
 
@@ -202,99 +118,24 @@ def _parse_dispensation(block: List[List[Any]]) -> Dict[str, float]:
     return out
 
 
-def _breach_marked(cell) -> Optional[float]:
-    """A month cell counts as a breach if it is a 'Y'/'Yes' flag or a positive
-    number.  Returns the breach weight (1 for a flag, the number itself if the
-    cell is numeric > 0) or None when the cell is blank / not a breach."""
-    if _blank(cell):
-        return None
-    if isinstance(cell, str):
-        s = cell.strip().lower()
-        if s in ("y", "yes", "true", "1"):
-            return 1.0
-        n = E._num(cell)
-        return n if (n is not None and n > 0) else None
-    n = E._num(cell)
-    return n if (n is not None and n > 0) else None
-
-
-def _is_month_col(v) -> bool:
-    """A month column header in MMM-YY form (Mar-25, Apr-25, ...).  Falls back to
-    the engine's general date detector so real Excel date cells are also caught.
-    Never fixates on any particular month - any MMM-YY header qualifies."""
-    if isinstance(v, str) and re.match(r"^\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
-                                       r"[\s\-/]*\d{2,4}\s*$", v.strip(), re.I):
-        return True
-    return E._is_date_like(v)
-
-
 def _parse_breaches(block: List[List[Any]]) -> Dict[str, int]:
-    """Parse a 'Credit Risk Appetite Breaches - <Category>' block.
-
-    The block is read generically - it is anchored on the **Country** column and
-    the **month columns in MMM-YY format** (Mar-25, Apr-25, ... Mar-26), not on
-    any specific month:
-
-        Country | Mar-25 | Apr-25 | ... | Mar-26 | L12M
-
-    A month cell holds 'Y' (a breach that month) or is blank; the final L12M
-    column is the pre-computed total.  The count per country is the L12M total
-    when that column is present and numeric (authoritative); otherwise it is the
-    number of breach markers (Y / Yes / positive number) counted across every
-    detected month column.  The 'Country' header row and the 'Total' row are
-    skipped.
-    """
-    out: Dict[str, int] = {}
+    """Country | <months Y/blank> | L12M  ->  {country: count of Y in last 12 months}."""
+    out = {}
     if not block:
         return out
-
-    # 1) find the header row: the one that has a 'Country' label AND month columns
-    hdr_idx = None
-    for i, row in enumerate(block):
-        has_country = any(isinstance(c, str) and c.strip().lower() == "country" for c in row)
-        n_months = sum(1 for v in row if _is_month_col(v))
-        if has_country and n_months >= 2:
-            hdr_idx = i
-            break
-    if hdr_idx is None:                                  # fall back: first row with >=2 months
-        for i, row in enumerate(block):
-            if sum(1 for v in row if _is_month_col(v)) >= 2:
-                hdr_idx = i
-                break
-    if hdr_idx is None:
-        return out
-    header = block[hdr_idx]
-
-    # 2) locate the Country column, the month columns, and any L12M total column
-    month_cols = [j for j, v in enumerate(header) if _is_month_col(v)]
-    country_col = next((j for j, v in enumerate(header)
-                        if isinstance(v, str) and v.strip().lower() == "country"), None)
-    if country_col is None:                              # first non-month column
-        country_col = next((j for j in range(len(header)) if j not in month_cols), 0)
-
-    def _norm(v):
-        return re.sub(r"[^a-z0-9]", "", str(v).lower()) if v is not None else ""
-    l12_col = next((j for j, v in enumerate(header) if _norm(v).startswith("l12")), None)
-
-    # 3) one row per country
-    for r in block[hdr_idx + 1:]:
-        if country_col >= len(r) or _blank(r[country_col]):
+    header = block[0]
+    # month columns are the date-like headers
+    mcols = [i for i, v in enumerate(header) if E._is_date_like(v)]
+    last12 = mcols[-12:] if len(mcols) >= 12 else mcols
+    for r in block[1:]:
+        if not r or _blank(r[0]) or not isinstance(r[0], str):
             continue
-        country = str(r[country_col]).strip()
-        if country.lower() in ("country", "total", "grand total"):
+        country = r[0].strip()
+        if country.lower() in ("country", "total"):
             continue
-        counted = 0.0
-        for j in month_cols:
-            if j < len(r):
-                w = _breach_marked(r[j])
-                if w is not None:
-                    counted += w
-        cnt = counted
-        if l12_col is not None and l12_col < len(r):
-            lv = E._num(r[l12_col])
-            if lv is not None:
-                cnt = lv
-        out[country] = int(cnt) if float(cnt).is_integer() else cnt
+        cnt = sum(1 for i in last12
+                  if i < len(r) and isinstance(r[i], str) and r[i].strip().lower() == "y")
+        out[country] = cnt
     return out
 
 
